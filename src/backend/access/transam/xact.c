@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/fdwxact.h"
 #include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/subtrans.h"
@@ -2230,6 +2231,9 @@ CommitTransaction(void)
 	CallXactCallbacks(is_parallel_worker ? XACT_EVENT_PARALLEL_COMMIT
 					  : XACT_EVENT_COMMIT);
 
+	/* Commit foreign transaction if any */
+	AtEOXact_FdwXact(true);
+
 	ResourceOwnerRelease(TopTransactionResourceOwner,
 						 RESOURCE_RELEASE_BEFORE_LOCKS,
 						 true, true);
@@ -2368,6 +2372,9 @@ PrepareTransaction(void)
 	 * of this stuff could still throw an error, which would switch us into
 	 * the transaction-abort path.
 	 */
+
+	/* Prepare foreign trasactions */
+	PrePrepare_FdwXact();
 
 	/* Shut down the deferred-trigger manager */
 	AfterTriggerEndXact(true);
@@ -2755,6 +2762,9 @@ AbortTransaction(void)
 			CallXactCallbacks(XACT_EVENT_PARALLEL_ABORT);
 		else
 			CallXactCallbacks(XACT_EVENT_ABORT);
+
+		/* Rollback foreign transactions if any */
+		AtEOXact_FdwXact(false);
 
 		ResourceOwnerRelease(TopTransactionResourceOwner,
 							 RESOURCE_RELEASE_BEFORE_LOCKS,
