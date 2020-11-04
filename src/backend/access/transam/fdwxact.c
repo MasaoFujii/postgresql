@@ -181,6 +181,7 @@ typedef struct FdwXactEntry
 	CommitForeignTransaction_function commit_foreign_xact_fn;
 	RollbackForeignTransaction_function rollback_foreign_xact_fn;
 	PrepareForeignTransaction_function prepare_foreign_xact_fn;
+	GetPrepareId_function get_prepareid_fn;
 } FdwXactEntry;
 
 /*
@@ -385,6 +386,7 @@ FdwXactRegisterXact(UserMapping *usermapping, bool modified)
 	fdwent->commit_foreign_xact_fn = routine->CommitForeignTransaction;
 	fdwent->rollback_foreign_xact_fn = routine->RollbackForeignTransaction;
 	fdwent->prepare_foreign_xact_fn = routine->PrepareForeignTransaction;
+	fdwent->get_prepareid_fn = routine->GetPrepareId;
 
 	MemoryContextSwitchTo(old_ctx);
 
@@ -871,9 +873,10 @@ FdwXactPrepareForeignTransactions(TransactionId xid, bool prepare_all)
 }
 
 /*
- * Return a null-terminated foreign transaction identifier.  We generate an
- * unique identifier with in the form of
- * "fx_<random number>_<xid>_<umid> whose length is less than FDWXACT_ID_MAX_LEN.
+ * Return a null-terminated foreign transaction identifier.  If the given FDW
+ * supports getPrepareId callback we return the identifier returned from it.
+ * Otherwise we generate an unique identifier with in the form of
+ * "fx_<random number>_<xid>_<umid>" whose length is less than FDWXACT_ID_MAX_LEN.
  *
  * Returned string value is used to identify foreign transaction. The
  * identifier should not be same as any other concurrent prepared transaction
@@ -887,12 +890,47 @@ FdwXactPrepareForeignTransactions(TransactionId xid, bool prepare_all)
 static char *
 getFdwXactIdentifier(FdwXactEntry *fdwent, TransactionId xid)
 {
-	char		buf[FDWXACT_ID_MAX_LEN] = {0};
+	char *id;
+	int	id_len;
 
-	snprintf(buf, FDWXACT_ID_MAX_LEN, "fx_%ld_%u_%u", Abs(random()),
-			 xid, fdwent->umid);
+	/*
+	 * If FDW doesn't provide the callback function, generate an unique
+	 * identifier.
+	 */
+	if (!fdwent->get_prepareid_fn)
+	{
+		char		buf[FDWXACT_ID_MAX_LEN] = {0};
 
-	return pstrdup(buf);
+		snprintf(buf, FDWXACT_ID_MAX_LEN, "fx_%ld_%u_%u", Abs(random()),
+				 xid, fdwent->umid);
+
+		return pstrdup(buf);
+	}
+
+	/* Get an unique identifier from callback function */
+	id = fdwent->get_prepareid_fn(xid, fdwent->server->serverid,
+								  fdwent->usermapping->userid,
+								  &id_len);
+
+	if (id == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 (errmsg("foreign transaction identifier is not provided"))));
+
+	/* Check length of foreign transaction identifier */
+	if (id_len > FDWXACT_ID_MAX_LEN)
+	{
+		id[FDWXACT_ID_MAX_LEN] = '\0';
+		ereport(ERROR,
+				(errcode(ERRCODE_NAME_TOO_LONG),
+				 errmsg("foreign transaction identifier \"%s\" is too long",
+						id),
+				 errdetail("Foreign transaction identifier must be less than %d characters.",
+						   FDWXACT_ID_MAX_LEN)));
+	}
+
+	id[id_len] = '\0';
+	return pstrdup(id);
 }
 
 /*
