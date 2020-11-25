@@ -303,7 +303,7 @@ extern bool IsImportableForeignTable(const char *tablename,
 extern Path *GetExistingLocalJoinPath(RelOptInfo *joinrel);
 
 /* Functions in fdwxact/fdwxact.c */
-extern void FdwXactRegisterXact(UserMapping *usermapping);
+extern void FdwXactRegisterXact(UserMapping *usermapping, bool modified);
 extern void FdwXactUnregisterXact(UserMapping *usermapping);
 
 #endif							/* FDWAPI_H */
