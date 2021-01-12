@@ -71,6 +71,7 @@
 #include "storage/ipc.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
+#include "storage/procarray.h"
 #include "storage/procsignal.h"
 #include "storage/sinval.h"
 #include "tcop/fastpath.h"
@@ -4083,6 +4084,8 @@ PostgresMain(int argc, char *argv[],
 	 */
 	if (!IsUnderPostmaster)
 		PgStartTime = GetCurrentTimestamp();
+
+	MarkSnapshotNotReusable();
 
 	/*
 	 * POSTGRES main processing loop begins here
