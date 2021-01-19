@@ -149,6 +149,7 @@ extern int	ExtractConnectionOptions(List *defelems,
 									 const char **values);
 extern List *ExtractExtensionList(const char *extensionsString,
 								  bool warnOnMissing);
+extern int	ExtractXactIsoLevel(const char *value);
 
 /* in deparse.c */
 extern void classifyConditions(PlannerInfo *root,

@@ -13,6 +13,7 @@
 #include "postgres.h"
 
 #include "access/reloptions.h"
+#include "access/xact.h"
 #include "catalog/pg_foreign_server.h"
 #include "catalog/pg_foreign_table.h"
 #include "catalog/pg_user_mapping.h"
@@ -20,6 +21,7 @@
 #include "commands/extension.h"
 #include "postgres_fdw.h"
 #include "utils/builtins.h"
+#include "utils/guc.h"
 #include "utils/varlena.h"
 
 /*
@@ -43,6 +45,15 @@ static PgFdwOption *postgres_fdw_options;
  * Allocated and filled in InitPgFdwOptions.
  */
 static PQconninfoOption *libpq_options;
+
+/* The possible values of transaction isolation level */
+static const struct config_enum_entry isolation_level_options[] = {
+	{"serializable", XACT_SERIALIZABLE, false},
+	{"repeatable read", XACT_REPEATABLE_READ, false},
+	{"read committed", XACT_READ_COMMITTED, false},
+	{"read uncommitted", XACT_READ_UNCOMMITTED, false},
+	{NULL, 0}
+};
 
 /*
  * Helper functions
@@ -169,6 +180,18 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 						 errmsg("sslcert and sslkey are superuser-only"),
 						 errhint("User mappings with the sslcert or sslkey options set may only be created or modified by the superuser")));
 		}
+		else if (strcmp(def->defname, "transaction_isolation") == 0)
+		{
+			char	*value = defGetString(def);
+
+			if (ExtractXactIsoLevel(value) < 0)
+			{
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid value for parameter \"%s\": \"%s\"",
+								def->defname, value)));
+			}
+		}
 	}
 
 	PG_RETURN_VOID();
@@ -204,6 +227,7 @@ InitPgFdwOptions(void)
 		{"fetch_size", ForeignServerRelationId, false},
 		{"fetch_size", ForeignTableRelationId, false},
 		{"password_required", UserMappingRelationId, false},
+		{"transaction_isolation", ForeignServerRelationId, false},
 
 		/*
 		 * sslcert and sslkey are in fact libpq options, but we repeat them
@@ -397,4 +421,18 @@ ExtractExtensionList(const char *extensionsString, bool warnOnMissing)
 
 	list_free(extlist);
 	return extensionOids;
+}
+
+int
+ExtractXactIsoLevel(const char *value)
+{
+	const struct config_enum_entry *entry;
+
+	for (entry = isolation_level_options; entry && entry->name; entry++)
+	{
+		if (pg_strcasecmp(value, entry->name) == 0)
+			return entry->val;
+	}
+
+	return -1;
 }
