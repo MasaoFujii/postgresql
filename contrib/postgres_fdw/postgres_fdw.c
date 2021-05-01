@@ -1546,6 +1546,7 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 	 * establish new connection if necessary.
 	 */
 	fsstate->conn = GetConnection(user, false, &fsstate->conn_state);
+	MarkConnectionModified(user);
 
 	/* Assign a unique ID for my cursor */
 	fsstate->cursor_number = GetCursorNumber(fsstate->conn);
@@ -3968,6 +3969,7 @@ create_foreign_modify(EState *estate,
 
 	/* Open connection; report that we'll create a prepared statement. */
 	fmstate->conn = GetConnection(user, true, &fmstate->conn_state);
+	MarkConnectionModified(user);
 	fmstate->p_name = NULL;		/* prepared statement not made yet */
 
 	/* Set up remote query information. */
