@@ -1470,6 +1470,10 @@ doDeletion(const ObjectAddress *object, int flags)
 			RemovePublicationRelById(object->objectId);
 			break;
 
+		case OCLASS_USER_MAPPING:
+			RemoveUserMappingById(object->objectId);
+			break;
+
 		case OCLASS_CAST:
 		case OCLASS_COLLATION:
 		case OCLASS_CONVERSION:
@@ -1485,7 +1489,6 @@ doDeletion(const ObjectAddress *object, int flags)
 		case OCLASS_TSTEMPLATE:
 		case OCLASS_FDW:
 		case OCLASS_FOREIGN_SERVER:
-		case OCLASS_USER_MAPPING:
 		case OCLASS_DEFACL:
 		case OCLASS_EVENT_TRIGGER:
 		case OCLASS_PUBLICATION:
