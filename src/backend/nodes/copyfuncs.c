@@ -4356,6 +4356,18 @@ _copyAlterForeignServerStmt(const AlterForeignServerStmt *from)
 	return newnode;
 }
 
+static DropForeignServerStmt *
+_copyDropForeignServerStmt(const DropForeignServerStmt *from)
+{
+	DropForeignServerStmt *newnode = makeNode(DropForeignServerStmt);
+
+	COPY_STRING_FIELD(servername);
+	COPY_SCALAR_FIELD(missing_ok);
+	COPY_SCALAR_FIELD(behavior);
+
+	return newnode;
+}
+
 static CreateUserMappingStmt *
 _copyCreateUserMappingStmt(const CreateUserMappingStmt *from)
 {
@@ -5604,6 +5616,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_AlterForeignServerStmt:
 			retval = _copyAlterForeignServerStmt(from);
+			break;
+		case T_DropForeignServerStmt:
+			retval = _copyDropForeignServerStmt(from);
 			break;
 		case T_CreateUserMappingStmt:
 			retval = _copyCreateUserMappingStmt(from);

@@ -403,6 +403,7 @@ typedef enum NodeTag
 	T_AlterFdwStmt,
 	T_CreateForeignServerStmt,
 	T_AlterForeignServerStmt,
+	T_DropForeignServerStmt,
 	T_CreateUserMappingStmt,
 	T_AlterUserMappingStmt,
 	T_DropUserMappingStmt,

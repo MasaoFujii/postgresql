@@ -1984,6 +1984,17 @@ _equalAlterForeignServerStmt(const AlterForeignServerStmt *a, const AlterForeign
 }
 
 static bool
+_equalDropForeignServerStmt(const DropForeignServerStmt *a,
+							const DropForeignServerStmt *b)
+{
+	COMPARE_STRING_FIELD(servername);
+	COMPARE_SCALAR_FIELD(missing_ok);
+	COMPARE_SCALAR_FIELD(behavior);
+
+	return true;
+}
+
+static bool
 _equalCreateUserMappingStmt(const CreateUserMappingStmt *a, const CreateUserMappingStmt *b)
 {
 	COMPARE_NODE_FIELD(user);
@@ -3600,6 +3611,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_AlterForeignServerStmt:
 			retval = _equalAlterForeignServerStmt(a, b);
+			break;
+		case T_DropForeignServerStmt:
+			retval = _equalDropForeignServerStmt(a, b);
 			break;
 		case T_CreateUserMappingStmt:
 			retval = _equalCreateUserMappingStmt(a, b);

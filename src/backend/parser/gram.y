@@ -281,7 +281,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		CreateAssertionStmt CreateTransformStmt CreateTrigStmt CreateEventTrigStmt
 		CreateUserStmt CreateUserMappingStmt CreateRoleStmt CreatePolicyStmt
 		CreatedbStmt DeclareCursorStmt DefineStmt DeleteStmt DiscardStmt DoStmt
-		DropOpClassStmt DropOpFamilyStmt DropStmt
+		DropOpClassStmt DropOpFamilyStmt DropForeignServerStmt DropStmt
 		DropCastStmt DropRoleStmt
 		DropdbStmt DropTableSpaceStmt
 		DropTransformStmt
@@ -980,6 +980,7 @@ stmt:
 			| DiscardStmt
 			| DoStmt
 			| DropCastStmt
+			| DropForeignServerStmt
 			| DropOpClassStmt
 			| DropOpFamilyStmt
 			| DropOwnedStmt
@@ -6339,6 +6340,7 @@ object_type_name:
 			drop_type_name							{ $$ = $1; }
 			| DATABASE								{ $$ = OBJECT_DATABASE; }
 			| ROLE									{ $$ = OBJECT_ROLE; }
+			| SERVER								{ $$ = OBJECT_FOREIGN_SERVER; }
 			| SUBSCRIPTION							{ $$ = OBJECT_SUBSCRIPTION; }
 			| TABLESPACE							{ $$ = OBJECT_TABLESPACE; }
 		;
@@ -6351,7 +6353,6 @@ drop_type_name:
 			| opt_procedural LANGUAGE				{ $$ = OBJECT_LANGUAGE; }
 			| PUBLICATION							{ $$ = OBJECT_PUBLICATION; }
 			| SCHEMA								{ $$ = OBJECT_SCHEMA; }
-			| SERVER								{ $$ = OBJECT_FOREIGN_SERVER; }
 		;
 
 /* object types attached to a table */
@@ -9792,6 +9793,30 @@ DropSubscriptionStmt: DROP SUBSCRIPTION name opt_drop_behavior
 				{
 					DropSubscriptionStmt *n = makeNode(DropSubscriptionStmt);
 					n->subname = $5;
+					n->missing_ok = true;
+					n->behavior = $6;
+					$$ = (Node *) n;
+				}
+		;
+
+/*****************************************************************************
+ *
+ * DROP SERVER [ IF EXISTS ] name
+ *
+ *****************************************************************************/
+
+DropForeignServerStmt: DROP SERVER name opt_drop_behavior
+				{
+					DropForeignServerStmt *n = makeNode(DropForeignServerStmt);
+					n->servername = $3;
+					n->missing_ok = false;
+					n->behavior = $4;
+					$$ = (Node *) n;
+				}
+				|  DROP SERVER IF_P EXISTS name opt_drop_behavior
+				{
+					DropForeignServerStmt *n = makeNode(DropForeignServerStmt);
+					n->servername = $5;
 					n->missing_ok = true;
 					n->behavior = $6;
 					$$ = (Node *) n;
