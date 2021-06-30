@@ -20,6 +20,7 @@
 #include "commands/extension.h"
 #include "postgres_fdw.h"
 #include "utils/builtins.h"
+#include "utils/guc.h"
 #include "utils/varlena.h"
 
 /*
@@ -120,13 +121,20 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 		{
 			/* these must have a non-negative numeric value */
 			double		val;
-			char	   *endp;
+			bool		is_parsed;
 
-			val = strtod(defGetString(def), &endp);
-			if (*endp || val < 0)
+			is_parsed = parse_real(defGetString(def), &val, 0, NULL);
+
+			if (!is_parsed)
 				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("%s requires a non-negative numeric value",
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid numeric value for option \"%s\"",
+								def->defname)));
+
+			if (val < 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("\"%s\" requires a non-negative numeric value",
 								def->defname)));
 		}
 		else if (strcmp(def->defname, "extensions") == 0)
@@ -134,26 +142,24 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 			/* check list syntax, warn about uninstalled extensions */
 			(void) ExtractExtensionList(defGetString(def), true);
 		}
-		else if (strcmp(def->defname, "fetch_size") == 0)
+		else if (strcmp(def->defname, "fetch_size") == 0 ||
+				 strcmp(def->defname, "batch_size") == 0)
 		{
-			int			fetch_size;
+			int			val;
+			bool		is_parsed;
 
-			fetch_size = strtol(defGetString(def), NULL, 10);
-			if (fetch_size <= 0)
+			is_parsed = parse_int(defGetString(def), &val, 0, NULL);
+
+			if (!is_parsed)
 				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("%s requires a non-negative integer value",
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid integer value for option \"%s\"",
 								def->defname)));
-		}
-		else if (strcmp(def->defname, "batch_size") == 0)
-		{
-			int			batch_size;
 
-			batch_size = strtol(defGetString(def), NULL, 10);
-			if (batch_size <= 0)
+			if (val <= 0)
 				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("%s requires a non-negative integer value",
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("\"%s\" requires a non-negative integer value",
 								def->defname)));
 		}
 		else if (strcmp(def->defname, "password_required") == 0)
