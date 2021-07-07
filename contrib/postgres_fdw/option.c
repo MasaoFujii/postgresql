@@ -120,7 +120,7 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 				 strcmp(def->defname, "fdw_tuple_cost") == 0)
 		{
 			/* these must have a non-negative numeric value */
-			char		*value;
+			char	   *value;
 			double		real_val;
 			bool		is_parsed;
 
@@ -147,7 +147,7 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 		else if (strcmp(def->defname, "fetch_size") == 0 ||
 				 strcmp(def->defname, "batch_size") == 0)
 		{
-			char		*value;
+			char	   *value;
 			int			int_val;
 			bool		is_parsed;
 
