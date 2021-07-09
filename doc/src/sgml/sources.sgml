@@ -880,6 +880,17 @@ BETTER: unrecognized node type: 42
    </para>
   </simplesect>
 
+  <simplesect>
+   <title>Avoid Using <quote>non-negative</quote> Word in Error Messages</title>
+
+   <para>
+    Do not use <quote>non-negative</quote> word in error messages as it looks
+    ambiguous. Instead, use <quote>foo must be an integer value greater than zero</quote>
+    or  <quote>foo must be an integer value greater than or equal to zero</quote>
+    if option <quote>foo</quote> expects an integer value.
+   </para>
+  </simplesect>
+
   </sect1>
 
   <sect1 id="source-conventions">
