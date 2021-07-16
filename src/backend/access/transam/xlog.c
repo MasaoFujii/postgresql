@@ -10126,7 +10126,10 @@ xlog_redo(XLogReaderState *record)
 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
 	XLogRecPtr	lsn = record->EndRecPtr;
 
-	/* in XLOG rmgr, backup blocks are only used by XLOG_FPI records */
+	/*
+	 * in XLOG rmgr, backup blocks are only used by XLOG_FPI and
+	 * XLOG_FPI_FOR_HINT records.
+	 */
 	Assert(info == XLOG_FPI || info == XLOG_FPI_FOR_HINT ||
 		   !XLogRecHasAnyBlockRefs(record));
 
@@ -10345,13 +10348,22 @@ xlog_redo(XLogReaderState *record)
 		 *
 		 * XLOG_FPI_FOR_HINT records are generated when a page needs to be
 		 * WAL- logged because of a hint bit update. They are only generated
-		 * when checksums are enabled. There is no difference in handling
-		 * XLOG_FPI and XLOG_FPI_FOR_HINT records, they use a different info
-		 * code just to distinguish them for statistics purposes.
+		 * when checksums and/or wal_log_hints are enabled. The only difference
+		 * in handling XLOG_FPI and XLOG_FPI_FOR_HINT records is the latter is
+		 * allowed to be missing actual block image. In that case the record is
+		 * effectively a NOP record and should not even try to read the page
+		 * from disk.
 		 */
 		for (uint8 block_id = 0; block_id <= record->max_block_id; block_id++)
 		{
 			Buffer		buffer;
+
+			if (!XLogRecHasBlockImage(record, block_id))
+			{
+				if (info == XLOG_FPI)
+					elog(ERROR, "missing full page image in XLOG_FPI record");
+				continue;
+			}
 
 			if (XLogReadBufferForRedo(record, block_id, &buffer) != BLK_RESTORED)
 				elog(ERROR, "unexpected XLogReadBufferForRedo result when restoring backup block");
