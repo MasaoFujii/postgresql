@@ -183,8 +183,6 @@ EndFdwXactEntry(FdwXactEntry *fdwent, bool isCommit, bool is_parallel_worker)
 
 	finfo.server = fdwent->server;
 	finfo.usermapping = fdwent->usermapping;
-	finfo.flags = FDWXACT_FLAG_ONEPHASE |
-		((is_parallel_worker) ? FDWXACT_FLAG_PARALLEL_WORKER : 0);
 
 	if (isCommit)
 	{

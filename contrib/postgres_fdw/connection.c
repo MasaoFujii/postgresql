@@ -1486,8 +1486,6 @@ postgresCommitForeignTransaction(FdwXactInfo *finfo)
 	ConnCacheEntry *entry;
 	PGresult   *res;
 
-	Assert((finfo->flags & FDWXACT_FLAG_ONEPHASE) != 0);
-
 	entry = GetConnectionCacheEntry(finfo->usermapping->umid);
 
 	Assert(entry->conn);
@@ -1532,8 +1530,6 @@ postgresRollbackForeignTransaction(FdwXactInfo *finfo)
 {
 	ConnCacheEntry *entry = NULL;
 	bool abort_cleanup_failure = false;
-
-	Assert((finfo->flags & FDWXACT_FLAG_ONEPHASE) != 0);
 
 	entry = GetConnectionCacheEntry(finfo->usermapping->umid);
 	Assert(entry);

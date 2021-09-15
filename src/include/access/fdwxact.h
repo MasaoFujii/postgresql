@@ -13,18 +13,11 @@
 #include "access/xact.h"
 #include "foreign/foreign.h"
 
-/* Flag passed to FDW transaction management APIs */
-#define FDWXACT_FLAG_ONEPHASE		0x01	/* transaction can commit/rollback
-											 * without preparation */
-#define FDWXACT_FLAG_PARALLEL_WORKER	0x02	/* is parallel worker? */
-
 /* State data for foreign transaction resolution, passed to FDW callbacks */
 typedef struct FdwXactInfo
 {
 	ForeignServer	*server;
 	UserMapping		*usermapping;
-
-	int	flags;			/* OR of FDWXACT_FLAG_xx flags */
 } FdwXactInfo;
 
 /* Function declarations */
