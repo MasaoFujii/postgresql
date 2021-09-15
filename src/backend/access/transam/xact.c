@@ -2131,7 +2131,7 @@ CommitTransaction(void)
 		AtEOXact_Parallel(true);
 
 	/* Call foreign transaction callbacks at pre-commit phase, if any */
-	AtEOXact_FdwXact(true, is_parallel_worker);
+	AtEOXact_FdwXact(true);
 
 	/* Shut down the deferred-trigger manager */
 	AfterTriggerEndXact(true);
@@ -2722,7 +2722,7 @@ AbortTransaction(void)
 	AtAbort_Notify();
 	AtEOXact_RelationMap(false, is_parallel_worker);
 	AtAbort_Twophase();
-	AtEOXact_FdwXact(false, is_parallel_worker);
+	AtEOXact_FdwXact(false);
 
 	/*
 	 * Advertise the fact that we aborted in pg_xact (assuming that we got as
