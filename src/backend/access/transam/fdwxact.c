@@ -48,7 +48,6 @@ typedef struct FdwXactEntry
 	/* user mapping OID, hash key (must be first) */
 	Oid			umid;
 
-	ForeignServer *server;
 	UserMapping *usermapping;
 
 	/* Callbacks for foreign transaction */
@@ -112,7 +111,6 @@ FdwXactRegisterEntry(UserMapping *usermapping)
 	old_ctx = MemoryContextSwitchTo(TopTransactionContext);
 
 	fdwent->usermapping = GetUserMapping(usermapping->userid, usermapping->serverid);
-	fdwent->server = GetForeignServer(usermapping->serverid);
 
 	/*
 	 * Foreign server managed by the transaction manager must implement
@@ -180,7 +178,6 @@ EndFdwXactEntry(FdwXactEntry *fdwent, bool isCommit)
 
 	Assert(ServerSupportTransactionCallback(fdwent));
 
-	finfo.server = fdwent->server;
 	finfo.usermapping = fdwent->usermapping;
 
 	if (isCommit)

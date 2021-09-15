@@ -16,7 +16,6 @@
 /* State data for foreign transaction resolution, passed to FDW callbacks */
 typedef struct FdwXactInfo
 {
-	ForeignServer	*server;
 	UserMapping		*usermapping;
 } FdwXactInfo;
 
