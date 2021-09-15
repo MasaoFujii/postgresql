@@ -130,14 +130,6 @@ FdwXactRegisterEntry(UserMapping *usermapping)
 	MemoryContextSwitchTo(old_ctx);
 }
 
-/* Remove the foreign transaction from FdwXactParticipants */
-void
-FdwXactUnregisterEntry(UserMapping *usermapping)
-{
-	Assert(IsTransactionState());
-	RemoveFdwXactEntry(usermapping->umid);
-}
-
 /*
  * Remove an FdwXactEntry identified by the given user mapping id from the
  * hash table.

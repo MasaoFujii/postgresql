@@ -302,6 +302,5 @@ extern Path *GetExistingLocalJoinPath(RelOptInfo *joinrel);
 
 /* Functions in transam/fdwxact.c */
 extern void FdwXactRegisterEntry(UserMapping *usermapping);
-extern void FdwXactUnregisterEntry(UserMapping *usermapping);
 
 #endif							/* FDWAPI_H */
