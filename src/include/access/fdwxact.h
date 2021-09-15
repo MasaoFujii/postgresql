@@ -21,7 +21,7 @@ typedef struct FdwXactInfo
 } FdwXactInfo;
 
 /* Function declarations */
-extern void AtEOXact_FdwXact(bool isCommit, bool is_parallel_worker);
+extern void AtEOXact_FdwXact(bool isCommit);
 extern void AtPrepare_FdwXact(void);
 
 #endif /* FDWXACT_H */

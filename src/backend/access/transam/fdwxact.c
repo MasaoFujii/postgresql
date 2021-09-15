@@ -68,8 +68,7 @@ static HTAB *FdwXactParticipants = NULL;
 	(FdwXactParticipants != NULL && \
 	 hash_get_num_entries(FdwXactParticipants) > 0)
 
-static void EndFdwXactEntry(FdwXactEntry *fdwent, bool isCommit,
-							bool is_parallel_worker);
+static void EndFdwXactEntry(FdwXactEntry *fdwent, bool isCommit);
 static void RemoveFdwXactEntry(Oid umid);
 
 /*
@@ -144,7 +143,7 @@ RemoveFdwXactEntry(Oid umid)
  * Commit or rollback all foreign transactions.
  */
 void
-AtEOXact_FdwXact(bool isCommit, bool is_parallel_worker)
+AtEOXact_FdwXact(bool isCommit)
 {
 	FdwXactEntry *fdwent;
 	HASH_SEQ_STATUS scan;
@@ -159,7 +158,7 @@ AtEOXact_FdwXact(bool isCommit, bool is_parallel_worker)
 		Assert(ServerSupportTransactionCallback(fdwent));
 
 		/* Commit or rollback foreign transaction */
-		EndFdwXactEntry(fdwent, isCommit, is_parallel_worker);
+		EndFdwXactEntry(fdwent, isCommit);
 
 		/*
 		 * Remove the entry so that we don't recursively process this foreign
@@ -175,7 +174,7 @@ AtEOXact_FdwXact(bool isCommit, bool is_parallel_worker)
  * The routine for committing or rolling back the given transaction participant.
  */
 static void
-EndFdwXactEntry(FdwXactEntry *fdwent, bool isCommit, bool is_parallel_worker)
+EndFdwXactEntry(FdwXactEntry *fdwent, bool isCommit)
 {
 	FdwXactInfo finfo;
 
