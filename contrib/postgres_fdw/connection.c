@@ -77,9 +77,6 @@ static HTAB *ConnectionHash = NULL;
 static unsigned int cursor_number = 0;
 static unsigned int prep_stmt_number = 0;
 
-/* tracks whether any work is needed in callback functions */
-static bool xact_got_connection = false;
-
 /*
  * SQL functions
  */
@@ -129,9 +126,6 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	bool		retry = false;
 	ConnCacheEntry *entry;
 	MemoryContext ccxt = CurrentMemoryContext;
-
-	/* Set flag that we did GetConnection during the current transaction */
-	xact_got_connection = true;
 
 	entry = GetConnectionCacheEntry(user->umid);
 
@@ -869,10 +863,8 @@ pgfdw_subxact_callback(SubXactEvent event, SubTransactionId mySubid,
 		  event == SUBXACT_EVENT_ABORT_SUB))
 		return;
 
-	Assert((xact_got_connection && HasFdwXactParticipant()) ||
-		   !xact_got_connection && !HasFdwXactParticipant());
 	/* Quick exit if no connections were touched in this transaction. */
-	if (!xact_got_connection)
+	if (!HasFdwXactParticipant())
 		return;
 
 	/*
@@ -1625,12 +1617,6 @@ pgfdw_cleanup_after_transaction(ConnCacheEntry *entry)
 		elog(DEBUG3, "discarding connection %p", entry->conn);
 		disconnect_pg_server(entry);
 	}
-
-	/*
-	 * Regardless of the event type, we can now mark ourselves as out of the
-	 * transaction.
-	 */
-   xact_got_connection = false;
 
 	/* Also reset cursor numbering for next transaction */
 	cursor_number = 0;
