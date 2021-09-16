@@ -62,11 +62,6 @@ typedef struct FdwXactEntry
  */
 static HTAB *FdwXactParticipants = NULL;
 
-/* Check the current transaction has at least one fdwxact participant */
-#define HasFdwXactParticipant() \
-	(FdwXactParticipants != NULL && \
-	 hash_get_num_entries(FdwXactParticipants) > 0)
-
 static void EndFdwXactEntry(FdwXactEntry *fdwent, bool isCommit);
 static void RemoveFdwXactEntry(Oid umid);
 
@@ -125,6 +120,15 @@ FdwXactRegisterEntry(UserMapping *usermapping)
 	fdwent->rollback_foreign_xact_fn = routine->RollbackForeignTransaction;
 
 	MemoryContextSwitchTo(old_ctx);
+}
+
+/*
+ * Check the current transaction has at least one fdwxact participant.
+ */
+bool HasFdwXactParticipant(void)
+{
+	return (FdwXactParticipants != NULL &&
+			hash_get_num_entries(FdwXactParticipants) > 0);
 }
 
 /*

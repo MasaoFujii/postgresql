@@ -869,6 +869,8 @@ pgfdw_subxact_callback(SubXactEvent event, SubTransactionId mySubid,
 		  event == SUBXACT_EVENT_ABORT_SUB))
 		return;
 
+	Assert((xact_got_connection && HasFdwXactParticipant()) ||
+		   !xact_got_connection && !HasFdwXactParticipant());
 	/* Quick exit if no connections were touched in this transaction. */
 	if (!xact_got_connection)
 		return;
