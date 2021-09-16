@@ -1609,8 +1609,10 @@ pgfdw_cleanup_after_transaction(ConnCacheEntry *entry)
 	entry->have_error = false;
 
 	/*
-	 * If the connection isn't in a good idle state, discard it to
-	 * recover. Next GetConnection will open a new connection.
+	 * If the connection isn't in a good idle state, it is marked as
+	 * invalid or keep_connections option of its server is disabled, then
+	 * discard it to recover. Next GetConnection will open a new
+	 * connection.
 	 */
 	if (PQstatus(entry->conn) != CONNECTION_OK ||
 		PQtransactionStatus(entry->conn) != PQTRANS_IDLE ||
