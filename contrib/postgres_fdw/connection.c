@@ -625,6 +625,10 @@ begin_remote_xact(ConnCacheEntry *entry, UserMapping *user)
 		elog(DEBUG3, "starting remote transaction on connection %p",
 			 entry->conn);
 
+		/* Reset cursor numbering for this transaction */
+		if (!HasFdwXactParticipant())
+			cursor_number = 0;
+
 		/* Register the foreign server to the transaction */
 		FdwXactRegisterEntry(user);
 
@@ -1617,7 +1621,4 @@ pgfdw_cleanup_after_transaction(ConnCacheEntry *entry)
 		elog(DEBUG3, "discarding connection %p", entry->conn);
 		disconnect_pg_server(entry);
 	}
-
-	/* Also reset cursor numbering for next transaction */
-	cursor_number = 0;
 }
