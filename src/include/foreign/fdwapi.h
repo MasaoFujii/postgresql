@@ -192,8 +192,8 @@ typedef void (*ForeignAsyncConfigureWait_function) (AsyncRequest *areq);
 
 typedef void (*ForeignAsyncNotify_function) (AsyncRequest *areq);
 
-typedef void (*CommitForeignTransaction_function) (FdwXactInfo *finfo);
-typedef void (*RollbackForeignTransaction_function) (FdwXactInfo *finfo);
+typedef void (*CommitForeignTransaction_function) (Oid umid);
+typedef void (*RollbackForeignTransaction_function) (Oid umid);
 
 
 /*
@@ -301,7 +301,7 @@ extern bool IsImportableForeignTable(const char *tablename,
 extern Path *GetExistingLocalJoinPath(RelOptInfo *joinrel);
 
 /* Functions in transam/fdwxact.c */
-extern void FdwXactRegisterEntry(UserMapping *usermapping);
+extern void FdwXactRegisterEntry(Oid umid, Oid serverid);
 extern bool HasFdwXactParticipant(void);
 
 #endif							/* FDWAPI_H */

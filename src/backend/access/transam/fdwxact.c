@@ -8,10 +8,10 @@
  *
  * An FDW that implements both commit and rollback APIs can request to register
  * the foreign transaction participant by FdwXactRegisterEntry() to participate
- * it to a group of distributed tranasction.  The registered foreign transactions
+ * it to a group of distributed transaction.  The registered foreign transactions
  * are identified by user mapping OID.  On commit and rollback, the global
  * transaction manager calls corresponding FDW API to end the foreign
- * tranasctions.
+ * transactions.
  *
  * Portions Copyright (c) 2021, PostgreSQL Global Development Group
  *
@@ -30,9 +30,6 @@
 #include "utils/memutils.h"
 #include "utils/syscache.h"
 
-/* Initial size of the hash table */
-#define FDWXACT_HASH_SIZE	64
-
 /* Check the FdwXactEntry supports commit (and rollback) callbacks */
 #define ServerSupportTransactionCallback(fdwent) \
 	(((FdwXactEntry *)(fdwent))->commit_foreign_xact_fn != NULL)
@@ -45,10 +42,8 @@
  */
 typedef struct FdwXactEntry
 {
-	/* user mapping OID, hash key (must be first) */
+	/* User mapping OID, hash key (must be first) */
 	Oid			umid;
-
-	UserMapping *usermapping;
 
 	/* Callbacks for foreign transaction */
 	CommitForeignTransaction_function commit_foreign_xact_fn;
@@ -70,11 +65,10 @@ static void RemoveFdwXactEntry(Oid umid);
  * given user mapping OID as a participant of the transaction.
  */
 void
-FdwXactRegisterEntry(UserMapping *usermapping)
+FdwXactRegisterEntry(Oid umid, Oid serverid)
 {
 	FdwXactEntry *fdwent;
 	FdwRoutine *routine;
-	Oid			umid;
 	MemoryContext old_ctx;
 	bool		found;
 
@@ -86,13 +80,10 @@ FdwXactRegisterEntry(UserMapping *usermapping)
 
 		ctl.keysize = sizeof(Oid);
 		ctl.entrysize = sizeof(FdwXactEntry);
-
-		FdwXactParticipants = hash_create("fdw xact participants",
-										  FDWXACT_HASH_SIZE,
+		FdwXactParticipants = hash_create("fdw xact participants", 8,
 										  &ctl, HASH_ELEM | HASH_BLOBS);
 	}
 
-	umid = usermapping->umid;
 	fdwent = hash_search(FdwXactParticipants, (void *) &umid, HASH_ENTER, &found);
 
 	if (found)
@@ -105,14 +96,13 @@ FdwXactRegisterEntry(UserMapping *usermapping)
 	 */
 	old_ctx = MemoryContextSwitchTo(TopTransactionContext);
 
-	fdwent->usermapping = GetUserMapping(usermapping->userid, usermapping->serverid);
-
 	/*
 	 * Foreign server managed by the transaction manager must implement
 	 * transaction callbacks.
 	 */
-	routine = GetFdwRoutineByServerId(usermapping->serverid);
-	if (!routine->CommitForeignTransaction)
+	routine = GetFdwRoutineByServerId(serverid);
+	if (routine->CommitForeignTransaction == NULL ||
+		routine->RollbackForeignTransaction == NULL)
 		ereport(ERROR,
 				(errmsg("cannot register foreign server not supporting transaction callback")));
 
@@ -178,21 +168,17 @@ AtEOXact_FdwXact(bool isCommit)
 static void
 EndFdwXactEntry(FdwXactEntry *fdwent, bool isCommit)
 {
-	FdwXactInfo finfo;
-
 	Assert(ServerSupportTransactionCallback(fdwent));
-
-	finfo.usermapping = fdwent->usermapping;
 
 	if (isCommit)
 	{
-		fdwent->commit_foreign_xact_fn(&finfo);
+		fdwent->commit_foreign_xact_fn(fdwent->umid);
 		elog(DEBUG1, "successfully committed the foreign transaction for user mapping %u",
 			 fdwent->umid);
 	}
 	else
 	{
-		fdwent->rollback_foreign_xact_fn(&finfo);
+		fdwent->rollback_foreign_xact_fn(fdwent->umid);
 		elog(DEBUG1, "successfully rolled back the foreign transaction for user mapping %u",
 			 fdwent->umid);
 	}

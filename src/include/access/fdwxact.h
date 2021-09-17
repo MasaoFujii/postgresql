@@ -13,12 +13,6 @@
 #include "access/xact.h"
 #include "foreign/foreign.h"
 
-/* State data for foreign transaction resolution, passed to FDW callbacks */
-typedef struct FdwXactInfo
-{
-	UserMapping		*usermapping;
-} FdwXactInfo;
-
 /* Function declarations */
 extern void AtEOXact_FdwXact(bool isCommit);
 extern void AtPrepare_FdwXact(void);

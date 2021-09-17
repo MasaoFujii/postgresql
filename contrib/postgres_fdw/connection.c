@@ -630,7 +630,7 @@ begin_remote_xact(ConnCacheEntry *entry, UserMapping *user)
 			cursor_number = 0;
 
 		/* Register the foreign server to the transaction */
-		FdwXactRegisterEntry(user);
+		FdwXactRegisterEntry(user->umid, user->serverid);
 
 		if (IsolationIsSerializable())
 			sql = "START TRANSACTION ISOLATION LEVEL SERIALIZABLE";
@@ -1479,12 +1479,12 @@ disconnect_cached_connections(Oid serverid)
 }
 
 void
-postgresCommitForeignTransaction(FdwXactInfo *finfo)
+postgresCommitForeignTransaction(Oid umid)
 {
 	ConnCacheEntry *entry;
 	PGresult   *res;
 
-	entry = GetConnectionCacheEntry(finfo->usermapping->umid);
+	entry = GetConnectionCacheEntry(umid);
 
 	Assert(entry->conn);
 
@@ -1524,12 +1524,12 @@ postgresCommitForeignTransaction(FdwXactInfo *finfo)
 }
 
 void
-postgresRollbackForeignTransaction(FdwXactInfo *finfo)
+postgresRollbackForeignTransaction(Oid umid)
 {
 	ConnCacheEntry *entry = NULL;
 	bool abort_cleanup_failure = false;
 
-	entry = GetConnectionCacheEntry(finfo->usermapping->umid);
+	entry = GetConnectionCacheEntry(umid);
 	Assert(entry);
 
 	/*
