@@ -3423,3 +3423,50 @@ CREATE FOREIGN TABLE inv_fsz (c1 int )
 -- Invalid batch_size option
 CREATE FOREIGN TABLE inv_bsz (c1 int )
 	SERVER loopback OPTIONS (batch_size '100$%$#$#');
+
+-- ===================================================================
+-- test two phase commit
+-- ===================================================================
+SET debug_discard_caches = 0;
+
+ALTER SERVER loopback OPTIONS (SET application_name 'fdw_loopback');
+ALTER SERVER loopback2 OPTIONS (ADD application_name 'fdw_loopback2');
+
+SET postgres_fdw.two_phase_commit TO true;
+
+BEGIN;
+INSERT INTO "S 1"."T 3"(c1, c2) VALUES (1000901, 1000902);
+INSERT INTO ft1(c1, c2) VALUES (1000901, 1000902);
+INSERT INTO ft6(c1, c2) VALUES (1000901, 1000902);
+COMMIT;
+SELECT count(*) FROM "S 1"."T 3" WHERE c1 = 1000901;
+SELECT count(*) FROM ft1 WHERE c1 = 1000901;
+SELECT count(*) FROM ft6 WHERE c1 = 1000901;
+SELECT * FROM pg_prepared_xacts;
+
+BEGIN;
+INSERT INTO "S 1"."T 3"(c1, c2) VALUES (1000903, 1000904);
+INSERT INTO ft1(c1, c2) VALUES (1000903, 1000904);
+INSERT INTO ft6(c1, c2) VALUES (1000903, 1000904);
+ROLLBACK;
+SELECT count(*) FROM "S 1"."T 3" WHERE c1 = 1000903;
+SELECT count(*) FROM ft1 WHERE c1 = 1000903;
+SELECT count(*) FROM ft6 WHERE c1 = 1000903;
+SELECT * FROM pg_prepared_xacts;
+
+\set SHOW_CONTEXT never
+BEGIN;
+INSERT INTO "S 1"."T 3"(c1, c2) VALUES (1000905, 1000906);
+INSERT INTO ft1(c1, c2) VALUES (1000905, 1000906);
+INSERT INTO ft6(c1, c2) VALUES (1000905, 1000906);
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+       WHERE application_name = 'fdw_loopback2';
+COMMIT;
+SELECT count(*) FROM "S 1"."T 3" WHERE c1 = 1000905;
+SELECT count(*) FROM ft1 WHERE c1 = 1000905;
+SELECT count(*) FROM ft6 WHERE c1 = 1000905;
+SELECT * FROM pg_prepared_xacts;
+\unset SHOW_CONTEXT
+
+RESET postgres_fdw.two_phase_commit;
+RESET debug_discard_caches;

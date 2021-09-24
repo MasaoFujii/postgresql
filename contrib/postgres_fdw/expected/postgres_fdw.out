@@ -10764,3 +10764,109 @@ ERROR:  invalid value for integer option "fetch_size": 100$%$#$#
 CREATE FOREIGN TABLE inv_bsz (c1 int )
 	SERVER loopback OPTIONS (batch_size '100$%$#$#');
 ERROR:  invalid value for integer option "batch_size": 100$%$#$#
+-- ===================================================================
+-- test two phase commit
+-- ===================================================================
+SET debug_discard_caches = 0;
+ALTER SERVER loopback OPTIONS (SET application_name 'fdw_loopback');
+ALTER SERVER loopback2 OPTIONS (ADD application_name 'fdw_loopback2');
+SET postgres_fdw.two_phase_commit TO true;
+BEGIN;
+INSERT INTO "S 1"."T 3"(c1, c2) VALUES (1000901, 1000902);
+INSERT INTO ft1(c1, c2) VALUES (1000901, 1000902);
+INSERT INTO ft6(c1, c2) VALUES (1000901, 1000902);
+COMMIT;
+SELECT count(*) FROM "S 1"."T 3" WHERE c1 = 1000901;
+ count 
+-------
+     1
+(1 row)
+
+SELECT count(*) FROM ft1 WHERE c1 = 1000901;
+ count 
+-------
+     1
+(1 row)
+
+SELECT count(*) FROM ft6 WHERE c1 = 1000901;
+ count 
+-------
+     1
+(1 row)
+
+SELECT * FROM pg_prepared_xacts;
+ transaction | gid | prepared | owner | database 
+-------------+-----+----------+-------+----------
+(0 rows)
+
+BEGIN;
+INSERT INTO "S 1"."T 3"(c1, c2) VALUES (1000903, 1000904);
+INSERT INTO ft1(c1, c2) VALUES (1000903, 1000904);
+INSERT INTO ft6(c1, c2) VALUES (1000903, 1000904);
+ROLLBACK;
+SELECT count(*) FROM "S 1"."T 3" WHERE c1 = 1000903;
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM ft1 WHERE c1 = 1000903;
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM ft6 WHERE c1 = 1000903;
+ count 
+-------
+     0
+(1 row)
+
+SELECT * FROM pg_prepared_xacts;
+ transaction | gid | prepared | owner | database 
+-------------+-----+----------+-------+----------
+(0 rows)
+
+\set SHOW_CONTEXT never
+BEGIN;
+INSERT INTO "S 1"."T 3"(c1, c2) VALUES (1000905, 1000906);
+INSERT INTO ft1(c1, c2) VALUES (1000905, 1000906);
+INSERT INTO ft6(c1, c2) VALUES (1000905, 1000906);
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+       WHERE application_name = 'fdw_loopback2';
+ pg_terminate_backend 
+----------------------
+ t
+(1 row)
+
+COMMIT;
+ERROR:  FATAL:  terminating connection due to administrator command
+server closed the connection unexpectedly
+	This probably means the server terminated abnormally
+	before or while processing the request.
+SELECT count(*) FROM "S 1"."T 3" WHERE c1 = 1000905;
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM ft1 WHERE c1 = 1000905;
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM ft6 WHERE c1 = 1000905;
+ count 
+-------
+     0
+(1 row)
+
+SELECT * FROM pg_prepared_xacts;
+ transaction | gid | prepared | owner | database 
+-------------+-----+----------+-------+----------
+(0 rows)
+
+\unset SHOW_CONTEXT
+RESET postgres_fdw.two_phase_commit;
+RESET debug_discard_caches;
