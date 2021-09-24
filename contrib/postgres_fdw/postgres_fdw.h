@@ -159,6 +159,7 @@ extern int	ExtractConnectionOptions(List *defelems,
 extern List *ExtractExtensionList(const char *extensionsString,
 								  bool warnOnMissing);
 extern char *pgfdw_application_name;
+extern bool pgfdw_two_phase_commit;
 
 /* in deparse.c */
 extern void classifyConditions(PlannerInfo *root,

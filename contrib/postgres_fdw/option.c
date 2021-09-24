@@ -49,6 +49,7 @@ static PQconninfoOption *libpq_options;
  * GUC parameters
  */
 char	   *pgfdw_application_name = NULL;
+bool		pgfdw_two_phase_commit = false;
 
 void		_PG_init(void);
 
@@ -467,4 +468,15 @@ _PG_init(void)
 							   NULL,
 							   NULL,
 							   NULL);
+
+	DefineCustomBoolVariable("postgres_fdw.two_phase_commit",
+							 "Use two phase commit to commit foreign transactions.",
+							 NULL,
+							 &pgfdw_two_phase_commit,
+							 false,
+							 PGC_USERSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
 }
