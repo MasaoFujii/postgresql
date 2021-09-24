@@ -25,6 +25,7 @@
 #include "storage/latch.h"
 #include "utils/builtins.h"
 #include "utils/datetime.h"
+#include "utils/guc.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
@@ -55,6 +56,7 @@ typedef struct ConnCacheEntry
 	/* Remaining fields are invalid when conn is NULL: */
 	int			xact_depth;		/* 0 = no xact open, 1 = main xact open, 2 =
 								 * one level of subxact open, etc */
+	FullTransactionId fxid;
 	bool		have_prep_stmt; /* have we prepared any stmts in this xact? */
 	bool		have_error;		/* have any subxacts aborted in this xact? */
 	bool		changing_xact_state;	/* xact state change in process */
@@ -109,6 +111,9 @@ static void pgfdw_abort_cleanup(ConnCacheEntry *entry, const char *sql,
 								bool toplevel);
 static bool UserMappingPasswordRequired(UserMapping *user);
 static bool disconnect_cached_connections(Oid serverid);
+static void pgfdw_prepare_xacts(void);
+static bool pgfdw_commit_prepared(ConnCacheEntry *entry);
+static bool pgfdw_rollback_prepared(ConnCacheEntry *entry);
 
 /*
  * Get a PGconn which can be used to execute queries on the remote PostgreSQL
@@ -293,6 +298,7 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 
 	/* Reset all transient state fields, to be sure all are clean */
 	entry->xact_depth = 0;
+	entry->fxid = InvalidFullTransactionId;
 	entry->have_prep_stmt = false;
 	entry->have_error = false;
 	entry->changing_xact_state = false;
@@ -857,6 +863,14 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 	if (!xact_got_connection)
 		return;
 
+	if (pgfdw_two_phase_commit &&
+		(event == XACT_EVENT_PARALLEL_PRE_COMMIT ||
+		 event == XACT_EVENT_PRE_COMMIT))
+	{
+		pgfdw_prepare_xacts();
+		return;
+	}
+
 	/*
 	 * Scan all connection cache entries to find open remote transactions, and
 	 * close them.
@@ -932,12 +946,18 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 					break;
 				case XACT_EVENT_PARALLEL_COMMIT:
 				case XACT_EVENT_COMMIT:
+
+					pgfdw_commit_prepared(entry);
+					break;
 				case XACT_EVENT_PREPARE:
 					/* Pre-commit should have closed the open transaction */
 					elog(ERROR, "missed cleaning up connection during pre-commit");
 					break;
 				case XACT_EVENT_PARALLEL_ABORT:
 				case XACT_EVENT_ABORT:
+
+					if (pgfdw_rollback_prepared(entry))
+						break;
 
 					pgfdw_abort_cleanup(entry, "ABORT TRANSACTION", true);
 					break;
@@ -946,6 +966,7 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 
 		/* Reset state to show we're out of a transaction */
 		entry->xact_depth = 0;
+		entry->fxid = InvalidFullTransactionId;
 
 		/*
 		 * If the connection isn't in a good idle state, it is marked as
@@ -1665,4 +1686,86 @@ disconnect_cached_connections(Oid serverid)
 	}
 
 	return result;
+}
+
+static void
+pgfdw_prepare_xacts(void)
+{
+	HASH_SEQ_STATUS scan;
+	ConnCacheEntry *entry;
+
+	hash_seq_init(&scan, ConnectionHash);
+	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
+	{
+		char		sql[256];
+
+		if (entry->conn == NULL || entry->xact_depth == 0)
+			continue;
+
+		pgfdw_reject_incomplete_xact_state_change(entry);
+
+		Assert(!FullTransactionIdIsValid(entry->fxid));
+		entry->fxid = GetTopFullTransactionId();
+
+		snprintf(sql, sizeof(sql),
+				 "PREPARE TRANSACTION 'pgfdw_%s_%lu_%u'",
+				 (*cluster_name == '\0') ? "null" : cluster_name,
+				 U64FromFullTransactionId(entry->fxid),
+				 (Oid) entry->key);
+
+		entry->changing_xact_state = true;
+		do_sql_command(entry->conn, sql);
+		entry->changing_xact_state = false;
+	}
+}
+
+static bool
+pgfdw_commit_prepared(ConnCacheEntry *entry)
+{
+	char		sql[256];
+	bool		success = false;
+
+	if (!FullTransactionIdIsValid(entry->fxid))
+		return false;
+
+	snprintf(sql, sizeof(sql),
+			 "COMMIT PREPARED 'pgfdw_%s_%lu_%u'",
+			 (*cluster_name == '\0') ? "null" : cluster_name,
+			 U64FromFullTransactionId(entry->fxid),
+			 (Oid) entry->key);
+
+	entry->changing_xact_state = true;
+	success = pgfdw_exec_cleanup_query(entry->conn, sql, false);
+	entry->changing_xact_state = false;
+
+	if (entry->have_prep_stmt && entry->have_error && success)
+	{
+		PGresult   *res = PQexec(entry->conn, "DEALLOCATE ALL");
+
+		PQclear(res);
+	}
+
+	entry->have_prep_stmt = false;
+	entry->have_error = false;
+	entry->fxid = InvalidFullTransactionId;
+
+	return true;
+}
+
+static bool
+pgfdw_rollback_prepared(ConnCacheEntry *entry)
+{
+	char		sql[256];
+
+	if (!FullTransactionIdIsValid(entry->fxid))
+		return false;
+
+	snprintf(sql, sizeof(sql),
+			 "ROLLBACK PREPARED 'pgfdw_%s_%lu_%u'",
+			 (*cluster_name == '\0') ? "null" : cluster_name,
+			 U64FromFullTransactionId(entry->fxid),
+			 (Oid) entry->key);
+	pgfdw_abort_cleanup(entry, sql, true);
+
+	return true;
 }
