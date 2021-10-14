@@ -1680,10 +1680,10 @@ pgfdw_prepare_xacts(void)
 		entry->fxid = GetTopFullTransactionId();
 
 		snprintf(sql, sizeof(sql),
-				 "PREPARE TRANSACTION 'pgfdw_%s_%lu_%u'",
-				 (*cluster_name == '\0') ? "null" : cluster_name,
+				 "PREPARE TRANSACTION 'pgfdw_%lu_%u_%s'",
 				 U64FromFullTransactionId(entry->fxid),
-				 (Oid) entry->key);
+				 (Oid) entry->key,
+				 (*cluster_name == '\0') ? "null" : cluster_name);
 
 		entry->changing_xact_state = true;
 		do_sql_command(entry->conn, sql);
@@ -1701,10 +1701,10 @@ pgfdw_commit_prepared(ConnCacheEntry *entry)
 		return false;
 
 	snprintf(sql, sizeof(sql),
-			 "COMMIT PREPARED 'pgfdw_%s_%lu_%u'",
-			 (*cluster_name == '\0') ? "null" : cluster_name,
+			 "COMMIT PREPARED 'pgfdw_%lu_%u_%s'",
 			 U64FromFullTransactionId(entry->fxid),
-			 (Oid) entry->key);
+			 (Oid) entry->key,
+			 (*cluster_name == '\0') ? "null" : cluster_name);
 
 	entry->changing_xact_state = true;
 	success = pgfdw_exec_cleanup_query(entry->conn, sql, false);
@@ -1733,10 +1733,10 @@ pgfdw_rollback_prepared(ConnCacheEntry *entry)
 		return false;
 
 	snprintf(sql, sizeof(sql),
-			 "ROLLBACK PREPARED 'pgfdw_%s_%lu_%u'",
-			 (*cluster_name == '\0') ? "null" : cluster_name,
+			 "ROLLBACK PREPARED 'pgfdw_%lu_%u_%s'",
 			 U64FromFullTransactionId(entry->fxid),
-			 (Oid) entry->key);
+			 (Oid) entry->key,
+			 (*cluster_name == '\0') ? "null" : cluster_name);
 	pgfdw_abort_cleanup(entry, sql, true);
 
 	return true;

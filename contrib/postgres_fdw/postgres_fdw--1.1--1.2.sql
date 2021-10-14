@@ -19,7 +19,7 @@ BEGIN
   END IF;
   sql := 'SELECT * FROM pg_prepared_xacts ' ||
     'WHERE owner = current_user AND database = current_database() ' ||
-    'AND gid LIKE ''pgfdw_' || current_setting('cluster_name') || '_%_%''';
+    'AND gid LIKE ''pgfdw_%_%_' || current_setting('cluster_name') || '''';
   RETURN QUERY SELECT * FROM
     dblink(server, sql) AS t1
     (transaction xid, gid text, prepared timestamp with time zone,
@@ -38,7 +38,7 @@ BEGIN
     FROM pg_foreign_prepared_xacts(server) LOOP
     sql := NULL;
     BEGIN
-      r.status := pg_xact_status(split_part(r.gid, '_', 3)::xid8);
+      r.status := pg_xact_status(split_part(r.gid, '_', 2)::xid8);
       CASE r.status
         WHEN 'committed' THEN
           sql := 'COMMIT PREPARED ''' || r.gid || '''';
