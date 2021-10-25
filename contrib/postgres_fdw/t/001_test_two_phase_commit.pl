@@ -171,7 +171,7 @@ sub test_if_two_phase_commit_used
 	my $txid_current = $node_master->safe_psql('postgres', qq(
 	SELECT txid_current();
 	));
-	$txid_current++;  # next txid
+	$txid_current++;  # prepared transaction id must have next txid
 	
 	# Execute the sql query
 	$node_master->safe_psql('postgres', $sql);
