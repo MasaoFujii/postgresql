@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 6;
+use Test::More tests => 9;
 
 # Setup a coordinator node
 my $node_master = PostgresNode->new("master");
@@ -64,17 +64,14 @@ CREATE TABLE l_table (c int);
 ));
 
 # Check current values for tests
-my $txid_current = $node_master->safe_psql('postgres', qq(
-SELECT txid_current();
-));
-my @foreign_server_oids;
+my @user_mapping_oids;
 foreach my $f_node (@foreign_nodes)
 {
 	my $srv_name = $f_node->name;
-	my $srv_oid = $node_master->safe_psql('postgres', qq(
-	SELECT oid FROM pg_foreign_server WHERE srvname = '$srv_name';
+	my $umid = $node_master->safe_psql('postgres', qq(
+	SELECT umid FROM pg_user_mappings WHERE srvname = '$srv_name';
 	));
-	push @foreign_server_oids, $srv_oid;
+	push @user_mapping_oids, $umid;
 }
 
 # Test patterns
@@ -103,14 +100,14 @@ SELECT * FROM $tbl3;
 COMMIT;
 ), ("true", "true", "true"));
 
-## Insert two foreign tables
-#test_if_two_phase_commit_used(qq(
-#BEGIN;
-#INSERT INTO $tbl1 VALUES (1);
-#INSERT INTO $tbl2 VALUES (1);
-#COMMIT;
-#), ("true", "true", "false"));
-#
+# Insert two foreign tables
+test_if_two_phase_commit_used(qq(
+BEGIN;
+INSERT INTO $tbl1 VALUES (1);
+INSERT INTO $tbl2 VALUES (1);
+COMMIT;
+), ("true", "true", "false"));
+
 ## Insert local table and a foregin table
 #test_two_phase_commit_used(qq(
 #BEGIN;
@@ -170,26 +167,30 @@ sub new_foreign_node
 sub test_if_two_phase_commit_used
 {
 	my ($sql, @used) = @_;
+
+	my $txid_current = $node_master->safe_psql('postgres', qq(
+	SELECT txid_current();
+	));
+	$txid_current++;  # next txid
 	
 	# Execute the sql query
 	$node_master->safe_psql('postgres', $sql);
 
 	# Prepare to verify
 	my $cluster_name = $node_master->name;  # cluster name is configured to the argument of PostgresNode->new()
-	$txid_current++;
 	
 	# Verify for each node using its log
 	while (my ($i, $f_node) = each(@foreign_nodes))
 	{
-		my $f_srv_oid = ${foreign_server_oids[$i]};
+		my $f_umid = ${user_mapping_oids[$i]};
 		my $f_node_log = slurp_file($f_node->logfile());
-		my $prepare_txid = "'pgfdw_${txid_current}_${f_srv_oid}_${cluster_name}'";
+		my $prepare_txid = "'pgfdw_${txid_current}_${f_umid}_${cluster_name}'";
 
 		if ($used[$i] eq 'true')
 		{
 			like(
 				$f_node_log,
-				qr/COMMIT PREPARED/,
+				qr/COMMIT PREPARED $prepare_txid/,
 				$prepare_txid
 			);
 		}
@@ -197,7 +198,7 @@ sub test_if_two_phase_commit_used
 		{
 			unlike(
 				$f_node_log,
-				qr/COMMIT PREPARED/,
+				qr/COMMIT PREPARED $prepare_txid/,
 				$prepare_txid
 			);
 		}
