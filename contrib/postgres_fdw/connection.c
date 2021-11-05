@@ -1688,6 +1688,17 @@ disconnect_cached_connections(Oid serverid)
 	return result;
 }
 
+/*
+ * Construct the prepared transaction command like PREPARE TRANSACTION
+ * that's issued to the foreign server. It consists of full transaction id,
+ * user mapping OID and cluster name.
+ */
+#define PreparedXactCommand(sql, cmd, entry)	\
+	snprintf(sql, sizeof(sql), "%s 'pgfdw_%lu_%u_%s'",	\
+			 cmd, U64FromFullTransactionId(entry->fxid),	\
+			 (Oid) entry->key,	\
+			 (*cluster_name == '\0') ? "null" : cluster_name)
+
 static void
 pgfdw_prepare_xacts(void)
 {
@@ -1707,11 +1718,7 @@ pgfdw_prepare_xacts(void)
 		Assert(!FullTransactionIdIsValid(entry->fxid));
 		entry->fxid = GetTopFullTransactionId();
 
-		snprintf(sql, sizeof(sql),
-				 "PREPARE TRANSACTION 'pgfdw_%lu_%u_%s'",
-				 U64FromFullTransactionId(entry->fxid),
-				 (Oid) entry->key,
-				 (*cluster_name == '\0') ? "null" : cluster_name);
+		PreparedXactCommand(sql, "PREPARE TRANSACTION", entry);
 
 		entry->changing_xact_state = true;
 		do_sql_command(entry->conn, sql);
@@ -1728,11 +1735,7 @@ pgfdw_commit_prepared(ConnCacheEntry *entry)
 	if (!FullTransactionIdIsValid(entry->fxid))
 		return false;
 
-	snprintf(sql, sizeof(sql),
-			 "COMMIT PREPARED 'pgfdw_%lu_%u_%s'",
-			 U64FromFullTransactionId(entry->fxid),
-			 (Oid) entry->key,
-			 (*cluster_name == '\0') ? "null" : cluster_name);
+	PreparedXactCommand(sql, "COMMIT PREPARED", entry);
 
 	entry->changing_xact_state = true;
 	success = pgfdw_exec_cleanup_query(entry->conn, sql, false);
@@ -1760,11 +1763,7 @@ pgfdw_rollback_prepared(ConnCacheEntry *entry)
 	if (!FullTransactionIdIsValid(entry->fxid))
 		return false;
 
-	snprintf(sql, sizeof(sql),
-			 "ROLLBACK PREPARED 'pgfdw_%lu_%u_%s'",
-			 U64FromFullTransactionId(entry->fxid),
-			 (Oid) entry->key,
-			 (*cluster_name == '\0') ? "null" : cluster_name);
+	PreparedXactCommand(sql, "ROLLBACK PREPARED", entry);
 	pgfdw_abort_cleanup(entry, sql, true);
 
 	return true;
