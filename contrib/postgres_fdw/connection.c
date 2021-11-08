@@ -64,6 +64,8 @@ typedef struct ConnCacheEntry
 	bool		keep_connections;	/* setting value of keep_connections
 									 * server option */
 	Oid			serverid;		/* foreign server OID used to get server name */
+	bool		modified;		/* true if foreign table on foriegn server was
+								 * modified */
 	uint32		server_hashvalue;	/* hash value of foreign server OID */
 	uint32		mapping_hashvalue;	/* hash value of user mapping OID */
 	PgFdwConnState state;		/* extra per-connection state */
@@ -114,6 +116,7 @@ static bool disconnect_cached_connections(Oid serverid);
 static void pgfdw_prepare_xacts(void);
 static bool pgfdw_commit_prepared(ConnCacheEntry *entry);
 static bool pgfdw_rollback_prepared(ConnCacheEntry *entry);
+static bool pgfdw_two_phase_commit_is_required(void);
 
 /*
  * Get a PGconn which can be used to execute queries on the remote PostgreSQL
@@ -127,9 +130,14 @@ static bool pgfdw_rollback_prepared(ConnCacheEntry *entry);
  *
  * If state is not NULL, *state receives the per-connection state associated
  * with the PGconn.
+ *
+ * If modified is true, this connection entry is marked as modified.
+ * This information is used to determine whether two-phase commit
+ * protocol is necessary to complete all the foreign transactions.
  */
 PGconn *
-GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
+GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state,
+			  bool modified)
 {
 	bool		found;
 	bool		retry = false;
@@ -281,6 +289,13 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	if (state)
 		*state = &entry->state;
 
+	/*
+	 * Mark this connection entry as modified if a foreign table will be
+	 * modified via the connection
+	 */
+	if (modified)
+		entry->modified = true;
+
 	return entry->conn;
 }
 
@@ -304,6 +319,7 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 	entry->changing_xact_state = false;
 	entry->invalidated = false;
 	entry->serverid = server->serverid;
+	entry->modified = false;
 	entry->server_hashvalue =
 		GetSysCacheHashValue1(FOREIGNSERVEROID,
 							  ObjectIdGetDatum(server->serverid));
@@ -865,7 +881,8 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 
 	if (pgfdw_two_phase_commit &&
 		(event == XACT_EVENT_PARALLEL_PRE_COMMIT ||
-		 event == XACT_EVENT_PRE_COMMIT))
+		 event == XACT_EVENT_PRE_COMMIT) &&
+		pgfdw_two_phase_commit_is_required())
 	{
 		pgfdw_prepare_xacts();
 		return;
@@ -967,6 +984,7 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 		/* Reset state to show we're out of a transaction */
 		entry->xact_depth = 0;
 		entry->fxid = InvalidFullTransactionId;
+		entry->modified = false;
 
 		/*
 		 * If the connection isn't in a good idle state, it is marked as
@@ -1767,4 +1785,49 @@ pgfdw_rollback_prepared(ConnCacheEntry *entry)
 	pgfdw_abort_cleanup(entry, sql, true);
 
 	return true;
+}
+
+/*
+ * Return true if two phase commit protocol is required to commit
+ * the local and foreign transactions. We determine that it's required
+ * if write transactions were performed on two or more servers.
+ *
+ * Return false if only read transaction ran or only a single server
+ * executed write transaction. In this case two phase commit protocol
+ * is not required even when two_phase_commit is enabled.
+ */
+static bool
+pgfdw_two_phase_commit_is_required(void)
+{
+	HASH_SEQ_STATUS scan;
+	ConnCacheEntry *entry;
+	int			nwritten = 0;
+
+	Assert(pgfdw_two_phase_commit);
+
+	/*
+	 * Determine that the local transaction is a write one if XID has already
+	 * been assigned to it.
+	 */
+	if (TransactionIdIsValid(GetTopTransactionIdIfAny()))
+		nwritten++;
+
+	hash_seq_init(&scan, ConnectionHash);
+	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
+	{
+		if (entry->conn == NULL || entry->xact_depth == 0)
+			continue;
+
+		if (entry->modified)
+			nwritten++;
+
+		if (nwritten >= 2)
+		{
+			hash_seq_term(&scan);
+			return true;
+		}
+	}
+
+	Assert(nwritten < 2);
+	return false;
 }
