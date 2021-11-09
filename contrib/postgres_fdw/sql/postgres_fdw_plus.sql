@@ -1,0 +1,102 @@
+-- ===================================================================
+-- create FDW objects
+-- ===================================================================
+
+-- postgres_fdw was already installed in postgres_fdw.sql
+
+DO $d$
+    BEGIN
+        EXECUTE $$CREATE SERVER pgfdw_plus_loopback1
+            FOREIGN DATA WRAPPER postgres_fdw
+            OPTIONS (dbname '$$||current_database()||$$',
+                     port '$$||current_setting('port')||$$',
+                     application_name 'pgfdw_plus_loopback1'
+            )$$;
+        EXECUTE $$CREATE SERVER pgfdw_plus_loopback2
+            FOREIGN DATA WRAPPER postgres_fdw
+            OPTIONS (dbname '$$||current_database()||$$',
+                     port '$$||current_setting('port')||$$',
+                     application_name 'pgfdw_plus_loopback2'
+            )$$;
+    END;
+$d$;
+
+CREATE USER MAPPING FOR CURRENT_USER SERVER pgfdw_plus_loopback1;
+CREATE USER MAPPING FOR CURRENT_USER SERVER pgfdw_plus_loopback2;
+
+-- ===================================================================
+-- create objects used by local transaction or through FDW
+-- pgfdw_plus_loopback1 and pgfdw_plus_loopback2 servers
+-- ===================================================================
+CREATE SCHEMA pgfdw_plus;
+SET search_path TO pgfdw_plus;
+
+CREATE TABLE t0 (c1 int PRIMARY KEY, c2 int);
+CREATE TABLE t1 (c1 int PRIMARY KEY, c2 int);
+CREATE TABLE t2 (c1 int PRIMARY KEY, c2 int);
+
+-- Disable autovacuum for these tables to avoid unexpected effects of that
+ALTER TABLE t0 SET (autovacuum_enabled = 'false');
+ALTER TABLE t1 SET (autovacuum_enabled = 'false');
+ALTER TABLE t2 SET (autovacuum_enabled = 'false');
+
+INSERT INTO t0 SELECT id, id FROM generate_series(1, 10) id;
+INSERT INTO t1 SELECT id, id FROM generate_series(11, 20) id;
+INSERT INTO t2 SELECT id, id FROM generate_series(21, 30) id;
+
+ANALYZE t0;
+ANALYZE t1;
+ANALYZE t2;
+
+-- ===================================================================
+-- create foreign tables
+-- ===================================================================
+CREATE FOREIGN TABLE ft1 (c1 int, c2 int) SERVER pgfdw_plus_loopback1
+    OPTIONS (schema_name 'pgfdw_plus', table_name 't1');
+CREATE FOREIGN TABLE ft2 (c1 int, c2 int) SERVER pgfdw_plus_loopback2
+    OPTIONS (schema_name 'pgfdw_plus', table_name 't2');
+
+-- ===================================================================
+-- test two phase commit
+-- ===================================================================
+SET postgres_fdw.two_phase_commit TO true;
+
+BEGIN;
+INSERT INTO t0 VALUES (100, 100);
+INSERT INTO ft1 VALUES (100, 100);
+INSERT INTO ft2 VALUES (100, 100);
+COMMIT;
+SELECT count(*) FROM t0 WHERE c1 = 100;
+SELECT count(*) FROM ft1 WHERE c1 = 100;
+SELECT count(*) FROM ft2 WHERE c1 = 100;
+SELECT * FROM pg_prepared_xacts;
+
+BEGIN;
+INSERT INTO t0 VALUES (200, 200);
+INSERT INTO ft1 VALUES (200, 200);
+INSERT INTO ft2 VALUES (200, 200);
+ROLLBACK;
+SELECT count(*) FROM t0 WHERE c1 = 200;
+SELECT count(*) FROM ft1 WHERE c1 = 200;
+SELECT count(*) FROM ft2 WHERE c1 = 200;
+SELECT * FROM pg_prepared_xacts;
+
+-- This local transaction and the foreign transactions on
+-- pgfdw_plus_loopback1 and pgfdw_plus_loopback2 servers
+-- all should be rollbacked because PREPARE TRANSACTION
+-- command should fail on pgfdw_plus_loopback2.
+\set SHOW_CONTEXT never
+BEGIN;
+INSERT INTO t0 VALUES (300, 300);
+INSERT INTO ft1 VALUES (300, 300);
+INSERT INTO ft2 VALUES (300, 300);
+SELECT pg_terminate_backend(pid, 10000) FROM pg_stat_activity
+       WHERE application_name = 'pgfdw_plus_loopback2';
+COMMIT;
+SELECT count(*) FROM t0 WHERE c1 = 300;
+SELECT count(*) FROM ft1 WHERE c1 = 300;
+SELECT count(*) FROM ft2 WHERE c1 = 300;
+SELECT * FROM pg_prepared_xacts;
+\unset SHOW_CONTEXT
+
+RESET postgres_fdw.two_phase_commit;
