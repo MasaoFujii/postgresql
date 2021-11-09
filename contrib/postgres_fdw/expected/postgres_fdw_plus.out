@@ -49,12 +49,31 @@ CREATE FOREIGN TABLE ft2 (c1 int, c2 int) SERVER pgfdw_plus_loopback2
 -- ===================================================================
 -- test two phase commit
 -- ===================================================================
+SET debug_discard_caches = 0;
 SET postgres_fdw.two_phase_commit TO true;
+-- Don't display CONTEXT fields in messages from the server,
+-- to make the tests stable.
+\set SHOW_CONTEXT never
+-- All three transactions are committed via two phase commit
+-- protocol because they are write transactions.
 BEGIN;
 INSERT INTO t0 VALUES (100, 100);
 INSERT INTO ft1 VALUES (100, 100);
 INSERT INTO ft2 VALUES (100, 100);
 COMMIT;
+SELECT split_part(query, '_', 1) FROM pg_stat_activity
+    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+       split_part       
+------------------------
+ COMMIT PREPARED 'pgfdw
+ COMMIT PREPARED 'pgfdw
+(2 rows)
+
+SELECT * FROM pg_prepared_xacts;
+ transaction | gid | prepared | owner | database 
+-------------+-----+----------+-------+----------
+(0 rows)
+
 SELECT count(*) FROM t0 WHERE c1 = 100;
  count 
 -------
@@ -73,48 +92,211 @@ SELECT count(*) FROM ft2 WHERE c1 = 100;
      1
 (1 row)
 
+-- All three transactions are committed via two phase commit protocol
+-- because two (local and foreign) of them are write transactions.
+BEGIN;
+INSERT INTO t0 VALUES (200, 200);
+INSERT INTO ft1 VALUES (200, 200);
+SELECT count(*) FROM ft2;
+ count 
+-------
+    11
+(1 row)
+
+COMMIT;
+SELECT split_part(query, '_', 1) FROM pg_stat_activity
+    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+       split_part       
+------------------------
+ COMMIT PREPARED 'pgfdw
+ COMMIT PREPARED 'pgfdw
+(2 rows)
+
 SELECT * FROM pg_prepared_xacts;
  transaction | gid | prepared | owner | database 
 -------------+-----+----------+-------+----------
 (0 rows)
 
-BEGIN;
-INSERT INTO t0 VALUES (200, 200);
-INSERT INTO ft1 VALUES (200, 200);
-INSERT INTO ft2 VALUES (200, 200);
-ROLLBACK;
 SELECT count(*) FROM t0 WHERE c1 = 200;
  count 
 -------
-     0
+     1
 (1 row)
 
 SELECT count(*) FROM ft1 WHERE c1 = 200;
  count 
 -------
-     0
+     1
 (1 row)
 
-SELECT count(*) FROM ft2 WHERE c1 = 200;
+-- All three transactions are committed via two phase commit protocol
+-- because two (two foreign) of them are write transactions.
+BEGIN;
+SELECT count(*) FROM t0;
  count 
 -------
-     0
+    12
 (1 row)
+
+INSERT INTO ft1 VALUES (300, 300);
+INSERT INTO ft2 VALUES (300, 300);
+COMMIT;
+SELECT split_part(query, '_', 1) FROM pg_stat_activity
+    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+       split_part       
+------------------------
+ COMMIT PREPARED 'pgfdw
+ COMMIT PREPARED 'pgfdw
+(2 rows)
 
 SELECT * FROM pg_prepared_xacts;
  transaction | gid | prepared | owner | database 
 -------------+-----+----------+-------+----------
 (0 rows)
 
--- This local transaction and the foreign transactions on
--- pgfdw_plus_loopback1 and pgfdw_plus_loopback2 servers
--- all should be rollbacked because PREPARE TRANSACTION
--- command should fail on pgfdw_plus_loopback2.
-\set SHOW_CONTEXT never
+SELECT count(*) FROM ft1 WHERE c1 = 300;
+ count 
+-------
+     1
+(1 row)
+
+SELECT count(*) FROM ft2 WHERE c1 = 300;
+ count 
+-------
+     1
+(1 row)
+
+-- All three transactions are committed without using two phase commit
+-- protocol because only local transaction is write one.
 BEGIN;
-INSERT INTO t0 VALUES (300, 300);
-INSERT INTO ft1 VALUES (300, 300);
-INSERT INTO ft2 VALUES (300, 300);
+INSERT INTO t0 VALUES (400, 400);
+SELECT count(*) FROM ft1;
+ count 
+-------
+    13
+(1 row)
+
+SELECT count(*) FROM ft2;
+ count 
+-------
+    12
+(1 row)
+
+COMMIT;
+SELECT split_part(query, '_', 1) FROM pg_stat_activity
+    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+     split_part     
+--------------------
+ COMMIT TRANSACTION
+ COMMIT TRANSACTION
+(2 rows)
+
+SELECT count(*) FROM t0 WHERE c1 = 400;
+ count 
+-------
+     1
+(1 row)
+
+-- All three transactions are committed without using two phase commit
+-- protocol because only one foreign transaction is write one.
+BEGIN;
+SELECT count(*) FROM t0;
+ count 
+-------
+    13
+(1 row)
+
+INSERT INTO ft1 VALUES (500, 500);
+SELECT count(*) FROM ft2;
+ count 
+-------
+    12
+(1 row)
+
+COMMIT;
+SELECT split_part(query, '_', 1) FROM pg_stat_activity
+    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+     split_part     
+--------------------
+ COMMIT TRANSACTION
+ COMMIT TRANSACTION
+(2 rows)
+
+SELECT count(*) FROM ft1 WHERE c1 = 500;
+ count 
+-------
+     1
+(1 row)
+
+-- All three transactions are committed without using two phase commit
+-- protocol because there are no write transactions.
+BEGIN;
+SELECT count(*) FROM t0;
+ count 
+-------
+    13
+(1 row)
+
+SELECT count(*) FROM ft1;
+ count 
+-------
+    14
+(1 row)
+
+SELECT count(*) FROM ft2;
+ count 
+-------
+    12
+(1 row)
+
+COMMIT;
+SELECT split_part(query, '_', 1) FROM pg_stat_activity
+    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+     split_part     
+--------------------
+ COMMIT TRANSACTION
+ COMMIT TRANSACTION
+(2 rows)
+
+-- When local transaction is rollbacked, foreign transactions are
+-- rollbacked without using two phase commit protocol.
+BEGIN;
+INSERT INTO t0 VALUES (600, 600);
+INSERT INTO ft1 VALUES (600, 600);
+INSERT INTO ft2 VALUES (600, 600);
+ROLLBACK;
+SELECT split_part(query, '_', 1) FROM pg_stat_activity
+    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+   split_part   
+----------------
+ DEALLOCATE ALL
+ DEALLOCATE ALL
+(2 rows)
+
+SELECT count(*) FROM t0 WHERE c1 = 600;
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM ft1 WHERE c1 = 600;
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM ft2 WHERE c1 = 600;
+ count 
+-------
+     0
+(1 row)
+
+-- All three transactions are rollbacked because PREPARE TRANSACTION
+-- fails on one of foreign server.
+BEGIN;
+INSERT INTO t0 VALUES (700, 700);
+INSERT INTO ft1 VALUES (700, 700);
+INSERT INTO ft2 VALUES (700, 700);
 SELECT pg_terminate_backend(pid, 10000) FROM pg_stat_activity
        WHERE application_name = 'pgfdw_plus_loopback2';
  pg_terminate_backend 
@@ -127,22 +309,11 @@ ERROR:  FATAL:  terminating connection due to administrator command
 server closed the connection unexpectedly
 	This probably means the server terminated abnormally
 	before or while processing the request.
-SELECT count(*) FROM t0 WHERE c1 = 300;
- count 
--------
-     0
-(1 row)
-
-SELECT count(*) FROM ft1 WHERE c1 = 300;
- count 
--------
-     0
-(1 row)
-
-SELECT count(*) FROM ft2 WHERE c1 = 300;
- count 
--------
-     0
+SELECT split_part(query, '_', 1) FROM pg_stat_activity
+    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+   split_part   
+----------------
+ DEALLOCATE ALL
 (1 row)
 
 SELECT * FROM pg_prepared_xacts;
@@ -150,5 +321,24 @@ SELECT * FROM pg_prepared_xacts;
 -------------+-----+----------+-------+----------
 (0 rows)
 
+SELECT count(*) FROM t0 WHERE c1 = 700;
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM ft1 WHERE c1 = 700;
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM ft2 WHERE c1 = 700;
+ count 
+-------
+     0
+(1 row)
+
 \unset SHOW_CONTEXT
 RESET postgres_fdw.two_phase_commit;
+RESET debug_discard_caches;
