@@ -1750,7 +1750,8 @@ pgfdw_prepare_xacts(void)
 		do_sql_command(entry->conn, sql);
 		entry->changing_xact_state = false;
 
-		umids = lappend_oid(umids, (Oid) entry->key);
+		if (pgfdw_track_xact_commits)
+			umids = lappend_oid(umids, (Oid) entry->key);
 	}
 
 	if (umids != NIL)

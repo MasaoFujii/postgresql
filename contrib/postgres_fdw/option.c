@@ -50,6 +50,7 @@ static PQconninfoOption *libpq_options;
  */
 char	   *pgfdw_application_name = NULL;
 bool		pgfdw_two_phase_commit = false;
+bool		pgfdw_track_xact_commits = true;
 
 void		_PG_init(void);
 
@@ -472,10 +473,21 @@ _PG_init(void)
 							   NULL);
 
 	DefineCustomBoolVariable("postgres_fdw.two_phase_commit",
-							 "Use two phase commit to commit foreign transactions.",
+							 "Uses two phase commit to commit foreign transactions.",
 							 NULL,
 							 &pgfdw_two_phase_commit,
 							 false,
+							 PGC_USERSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomBoolVariable("postgres_fdw.track_xact_commits",
+							 "Collects transaction commits information.",
+							 NULL,
+							 &pgfdw_track_xact_commits,
+							 true,
 							 PGC_USERSET,
 							 0,
 							 NULL,

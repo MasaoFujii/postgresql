@@ -160,6 +160,7 @@ extern List *ExtractExtensionList(const char *extensionsString,
 								  bool warnOnMissing);
 extern char *pgfdw_application_name;
 extern bool pgfdw_two_phase_commit;
+extern bool pgfdw_track_xact_commits;
 
 /* in deparse.c */
 extern void classifyConditions(PlannerInfo *root,
