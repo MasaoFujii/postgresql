@@ -24,8 +24,8 @@ CREATE USER MAPPING FOR CURRENT_USER SERVER pgfdw_plus_loopback2;
 -- create objects used by local transaction or through FDW
 -- pgfdw_plus_loopback1 and pgfdw_plus_loopback2 servers
 -- ===================================================================
-CREATE SCHEMA pgfdw_plus;
-SET search_path TO pgfdw_plus;
+CREATE SCHEMA regress_pgfdw_plus;
+SET search_path TO regress_pgfdw_plus;
 CREATE TABLE t0 (c1 int PRIMARY KEY, c2 int);
 CREATE TABLE t1 (c1 int PRIMARY KEY, c2 int);
 CREATE TABLE t2 (c1 int PRIMARY KEY, c2 int);
@@ -43,9 +43,9 @@ ANALYZE t2;
 -- create foreign tables
 -- ===================================================================
 CREATE FOREIGN TABLE ft1 (c1 int, c2 int) SERVER pgfdw_plus_loopback1
-    OPTIONS (schema_name 'pgfdw_plus', table_name 't1');
+    OPTIONS (schema_name 'regress_pgfdw_plus', table_name 't1');
 CREATE FOREIGN TABLE ft2 (c1 int, c2 int) SERVER pgfdw_plus_loopback2
-    OPTIONS (schema_name 'pgfdw_plus', table_name 't2');
+    OPTIONS (schema_name 'regress_pgfdw_plus', table_name 't2');
 -- ===================================================================
 -- test two phase commit
 -- ===================================================================
