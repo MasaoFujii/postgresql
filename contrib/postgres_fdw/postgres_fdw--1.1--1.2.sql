@@ -71,19 +71,19 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION
-  pg_resolve_foreign_prepared_xacts (server name)
+  pg_resolve_foreign_prepared_xacts (server name, force boolean DEFAULT false)
   RETURNS SETOF resolve_foreign_prepared_xacts AS $$
 DECLARE
   r resolve_foreign_prepared_xacts;
   sql TEXT;
-  fxid xid8;
+  full_xid xid8;
   pid integer;
 BEGIN
   FOR r IN SELECT NULL AS status, server, *
     FROM pg_foreign_prepared_xacts(server) LOOP
     sql := NULL;
     BEGIN
-      fxid := split_part(r.gid, '_', 2)::xid8;
+      full_xid := split_part(r.gid, '_', 2)::xid8;
       pid := split_part(r.gid, '_', 4)::integer;
 
       -- While the backend is committing or rollbacking the prepared
@@ -101,9 +101,14 @@ BEGIN
       -- even when the backend with the given PID is running the transaction
       -- with XID other than the given one. But this is OK because basically
       -- this can rarely happen and we can just retry soon later.
-      CONTINUE WHEN pg_local_and_foreign_xacts_are_running(fxid::xid, pid);
+      CONTINUE WHEN pg_local_and_foreign_xacts_are_running(full_xid::xid, pid);
 
-      r.status := pg_xact_status(fxid);
+      -- At first use pg_xact_status() to check the commit status of
+      -- the transaction with full_xid. Because we can use the function
+      -- for that purpose even when postgres_fdw.track_xact_commits is
+      -- disabled, and using it is faster than looking up
+      -- pgfdw_plus.xact_commits table.
+      r.status := pg_xact_status(full_xid);
       CASE r.status
         WHEN 'committed' THEN
           sql := 'COMMIT PREPARED ''' || r.gid || '''';
@@ -112,6 +117,31 @@ BEGIN
       END CASE;
     EXCEPTION WHEN OTHERS THEN
     END;
+
+    -- If pg_xact_status(full_xid) cannot report the commit status,
+    -- look up pgfdw_plus.xact_commits. We can determine that
+    -- the transaction was committed if the entry for full_xid is found in it.
+    -- Otherwise we can determine that the transaction was aborted
+    -- unless postgres_fdw.track_xact_commits had been disabled so far.
+    -- For the case where that's disabled, by default we don't rollback
+    -- the foreign prepared transaction if no entry for full_xid is found
+    -- in xact_commits. If the second argument "force" is true,
+    -- that transaction is forcibly rollbacked.
+    IF sql IS NULL THEN
+      PERFORM * FROM pgfdw_plus.xact_commits WHERE fxid = full_xid LIMIT 1;
+      IF FOUND THEN
+        r.status := 'committed';
+        sql := 'COMMIT PREPARED ''' || r.gid || '''';
+      ELSIF force THEN
+        r.status := 'aborted';
+        sql := 'ROLLBACK PREPARED ''' || r.gid || '''';
+      ELSE
+        RAISE NOTICE 'could not resolve foreign prepared transaction with gid "%"',
+          r.gid USING HINT = 'Commit status of transaction with fxid "' ||
+          full_xid || '" not found';
+      END IF;
+    END IF;
+
     IF sql IS NOT NULL THEN
       RETURN NEXT r;
       PERFORM dblink(server, sql);
