@@ -1,4 +1,18 @@
 -- ===================================================================
+-- global settings
+-- ===================================================================
+-- Don't display CONTEXT fields in messages from the server,
+-- to make the tests stable.
+\set SHOW_CONTEXT never
+
+-- ===================================================================
+-- create database users
+-- ===================================================================
+CREATE ROLE regress_pgfdw_plus_super1 SUPERUSER;
+CREATE ROLE regress_pgfdw_plus_super2 SUPERUSER;
+SET ROLE regress_pgfdw_plus_super1;
+
+-- ===================================================================
 -- create FDW objects
 -- ===================================================================
 
@@ -21,7 +35,7 @@ DO $d$
     END;
 $d$;
 
-CREATE USER MAPPING FOR CURRENT_USER SERVER pgfdw_plus_loopback1;
+CREATE USER MAPPING FOR PUBLIC SERVER pgfdw_plus_loopback1;
 CREATE USER MAPPING FOR CURRENT_USER SERVER pgfdw_plus_loopback2;
 
 -- ===================================================================
@@ -29,7 +43,7 @@ CREATE USER MAPPING FOR CURRENT_USER SERVER pgfdw_plus_loopback2;
 -- pgfdw_plus_loopback1 and pgfdw_plus_loopback2 servers
 -- ===================================================================
 CREATE SCHEMA regress_pgfdw_plus;
-SET search_path TO regress_pgfdw_plus;
+SET search_path TO regress_pgfdw_plus, "$user", public;
 
 CREATE TABLE t0 (c1 int PRIMARY KEY, c2 int);
 CREATE TABLE t1 (c1 int PRIMARY KEY, c2 int);
@@ -61,10 +75,6 @@ CREATE FOREIGN TABLE ft2 (c1 int, c2 int) SERVER pgfdw_plus_loopback2
 -- ===================================================================
 SET debug_discard_caches = 0;
 SET postgres_fdw.two_phase_commit TO true;
-
--- Don't display CONTEXT fields in messages from the server,
--- to make the tests stable.
-\set SHOW_CONTEXT never
 
 -- All three transactions are committed via two phase commit
 -- protocol because they are write transactions.
@@ -167,7 +177,27 @@ SELECT count(*) FROM t0 WHERE c1 = 700;
 SELECT count(*) FROM ft1 WHERE c1 = 700;
 SELECT count(*) FROM ft2 WHERE c1 = 700;
 
-\unset SHOW_CONTEXT
-
 RESET postgres_fdw.two_phase_commit;
 RESET debug_discard_caches;
+
+-- ===================================================================
+-- test pg_resolve_foreign_prepared_xacts
+-- ===================================================================
+CREATE EXTENSION dblink;
+
+SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
+-- This test should fail because the specified server doesn't exist.
+SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_nonexistent');
+
+SET ROLE regress_pgfdw_plus_super2;
+SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
+-- This test should fail because no user mapping for the specified server
+-- and regress_pgfdw_plus_super2 exists.
+SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SET ROLE regress_pgfdw_plus_super1;
+
+-- ===================================================================
+-- reset global settings
+-- ===================================================================
+\unset SHOW_CONTEXT

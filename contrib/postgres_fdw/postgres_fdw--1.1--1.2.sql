@@ -13,9 +13,11 @@ CREATE OR REPLACE FUNCTION
 DECLARE
   sql TEXT;
 BEGIN
-  PERFORM * FROM pg_foreign_server WHERE srvname = server;
+  PERFORM * FROM pg_user_mappings
+    WHERE srvname = server AND (usename = current_user OR usename = 'public');
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'server "%" does not exist', server;
+    RAISE EXCEPTION 'user mapping for server "%" and user "%" not found',
+      server, current_user;
   END IF;
   sql := 'SELECT * FROM pg_prepared_xacts ' ||
     'WHERE owner = current_user AND database = current_database() ' ||
