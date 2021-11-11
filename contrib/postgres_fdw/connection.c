@@ -13,7 +13,10 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/table.h"
 #include "access/xact.h"
+#include "catalog/indexing.h"
+#include "catalog/namespace.h"
 #include "catalog/pg_user_mapping.h"
 #include "commands/defrem.h"
 #include "funcapi.h"
@@ -28,8 +31,11 @@
 #include "utils/guc.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
+#include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
+#include "utils/rel.h"
+#include "utils/xid8.h"
 
 /*
  * Connection cache hash table entry
@@ -117,6 +123,7 @@ static void pgfdw_prepare_xacts(void);
 static bool pgfdw_commit_prepared(ConnCacheEntry *entry);
 static bool pgfdw_rollback_prepared(ConnCacheEntry *entry);
 static bool pgfdw_two_phase_commit_is_required(void);
+static void pgfdw_insert_xact_commits(List *umids);
 
 /*
  * Get a PGconn which can be used to execute queries on the remote PostgreSQL
@@ -1722,6 +1729,7 @@ pgfdw_prepare_xacts(void)
 {
 	HASH_SEQ_STATUS scan;
 	ConnCacheEntry *entry;
+	List		*umids = NIL;
 
 	hash_seq_init(&scan, ConnectionHash);
 	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
@@ -1741,7 +1749,12 @@ pgfdw_prepare_xacts(void)
 		entry->changing_xact_state = true;
 		do_sql_command(entry->conn, sql);
 		entry->changing_xact_state = false;
+
+		umids = lappend_oid(umids, (Oid) entry->key);
 	}
+
+	if (umids != NIL)
+		pgfdw_insert_xact_commits(umids);
 }
 
 static bool
@@ -1830,4 +1843,81 @@ pgfdw_two_phase_commit_is_required(void)
 
 	Assert(nwritten < 2);
 	return false;
+}
+
+/* Macros for pgfdw_plus.xact_commits table to track transaction commits */
+#define PGFDW_PLUS_SCHEMA	"pgfdw_plus"
+#define PGFDW_PLUS_XACT_COMMITS_TABLE	"xact_commits"
+#define PGFDW_PLUS_XACT_COMMITS_COLS	3
+
+/*
+ * Insert the following three information about the current local
+ * transaction into PGFDW_PLUS_XACT_COMMITS_TABLE table.
+ *
+ * 1. The full transaction ID of the current local transaction.
+ * 2. PID of the backend running the current local transaction.
+ * 3. Array of user mapping OID corresponding to a foreign transaction
+ *    that the current local transaction started. The list of
+ *    these user mapping OIDs needs to be specified in the argument
+ *    "umids". This list must not be NIL.
+ *
+ * Note that PGFDW_PLUS_XACT_COMMITS_TABLE, as it is named,
+ * eventually contains only the information of committed transactions.
+ * If the transaction is rollbacked, the record inserted by this function
+ * obviously gets unvisiable.
+ */
+static void
+pgfdw_insert_xact_commits(List *umids)
+{
+	Datum		values[PGFDW_PLUS_XACT_COMMITS_COLS];
+	bool		nulls[PGFDW_PLUS_XACT_COMMITS_COLS];
+	Datum	   *datums;
+	int			ndatums;
+	ArrayType  *arr;
+	ListCell   *lc;
+	Oid		namespaceId;
+	Oid		relId;
+	Relation	rel;
+	HeapTuple	tup;
+
+	Assert(umids != NIL);
+
+	MemSet(values, 0, sizeof(values));
+	MemSet(nulls, 0, sizeof(nulls));
+
+	values[0] = FullTransactionIdGetDatum(GetTopFullTransactionId());
+	values[1] = Int32GetDatum(MyProcPid);
+
+	/* Convert a list of umid to an oid[] Datum */
+	ndatums = list_length(umids);
+	datums = (Datum *) palloc(ndatums * sizeof(Datum));
+	ndatums = 0;
+	foreach(lc, umids)
+	{
+		Oid	umid = lfirst_oid(lc);
+		datums[ndatums++] = ObjectIdGetDatum(umid);
+	}
+	arr = construct_array(datums, ndatums, OIDOID, sizeof(Oid),
+						  true, TYPALIGN_INT);
+	values[2] = PointerGetDatum(arr);
+
+	/*
+	 * Look up the schema and table to store transaction commits
+	 * information. Note that we don't verify we have enough permissions
+	 * on them, nor run object access hooks for them.
+	 */
+	namespaceId = get_namespace_oid(PGFDW_PLUS_SCHEMA, false);
+	relId = get_relname_relid(PGFDW_PLUS_XACT_COMMITS_TABLE, namespaceId);
+	if (!OidIsValid(relId))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_TABLE),
+				 errmsg("relation \"%s.%s\" does not exist",
+						PGFDW_PLUS_SCHEMA,
+						PGFDW_PLUS_XACT_COMMITS_TABLE)));
+
+	rel = table_open(relId, RowExclusiveLock);
+	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
+	CatalogTupleInsert(rel, tup);
+
+	table_close(rel, NoLock);
 }
