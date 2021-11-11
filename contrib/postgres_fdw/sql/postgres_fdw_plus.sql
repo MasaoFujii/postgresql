@@ -198,6 +198,11 @@ SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
 SET ROLE regress_pgfdw_plus_super1;
 
 -- ===================================================================
+-- test pg_resolve_foreign_prepared_xacts_all
+-- ===================================================================
+SELECT * FROM pg_resolve_foreign_prepared_xacts_all();
+
+-- ===================================================================
 -- reset global settings
 -- ===================================================================
 \unset SHOW_CONTEXT

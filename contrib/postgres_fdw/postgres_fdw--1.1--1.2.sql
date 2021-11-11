@@ -155,9 +155,31 @@ CREATE OR REPLACE FUNCTION
   RETURNS SETOF resolve_foreign_prepared_xacts AS $$
 DECLARE
   r RECORD;
+  orig_user name;
+  errmsg TEXT;
 BEGIN
-  FOR r IN SELECT * FROM pg_foreign_server LOOP
-    RETURN QUERY SELECT * FROM pg_resolve_foreign_prepared_xacts(r.srvname);
+  orig_user = current_user;
+  FOR r IN
+    SELECT * FROM pg_foreign_data_wrapper fdw,
+      pg_foreign_server fs, pg_user_mappings um
+    WHERE fdw.fdwname = 'postgres_fdw' AND
+      fs.srvfdw = fdw.oid AND fs.oid = um.srvid
+    ORDER BY fs.srvname
+  LOOP
+    IF r.usename = 'public' THEN
+      EXECUTE 'SET ROLE ' || orig_user;
+    ELSIF r.usename <> current_user THEN
+      EXECUTE 'SET ROLE ' || r.usename;
+    END IF;
+
+    BEGIN
+      RETURN QUERY SELECT * FROM pg_resolve_foreign_prepared_xacts(r.srvname);
+    EXCEPTION WHEN OTHERS THEN
+      GET STACKED DIAGNOSTICS errmsg = MESSAGE_TEXT;
+      RAISE NOTICE 'could not resolve foreign prepared transactions on server "%"',
+        r.srvname USING DETAIL = 'Error message: ' || errmsg;
+    END;
   END LOOP;
+  EXECUTE 'SET ROLE ' || orig_user;
 END;
 $$ LANGUAGE plpgsql;
