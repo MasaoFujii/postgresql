@@ -151,7 +151,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION
-  pg_resolve_foreign_prepared_xacts_all()
+  pg_resolve_foreign_prepared_xacts_all(force boolean DEFAULT false)
   RETURNS SETOF resolve_foreign_prepared_xacts AS $$
 DECLARE
   r RECORD;
@@ -173,7 +173,8 @@ BEGIN
     END IF;
 
     BEGIN
-      RETURN QUERY SELECT * FROM pg_resolve_foreign_prepared_xacts(r.srvname);
+      RETURN QUERY SELECT *
+        FROM pg_resolve_foreign_prepared_xacts(r.srvname, force);
     EXCEPTION WHEN OTHERS THEN
       GET STACKED DIAGNOSTICS errmsg = MESSAGE_TEXT;
       RAISE NOTICE 'could not resolve foreign prepared transactions on server "%"',
