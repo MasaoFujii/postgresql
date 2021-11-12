@@ -159,8 +159,16 @@ extern int	ExtractConnectionOptions(List *defelems,
 extern List *ExtractExtensionList(const char *extensionsString,
 								  bool warnOnMissing);
 extern char *pgfdw_application_name;
-extern bool pgfdw_two_phase_commit;
+extern int pgfdw_two_phase_commit;
 extern bool pgfdw_track_xact_commits;
+
+/* Possible values for postgres_fdw.two_phase_commit */
+typedef enum
+{
+	PGFDW_2PC_OFF,
+	PGFDW_2PC_PREPARE,
+	PGFDW_2PC_ON
+}			PgFdw2PCMode;
 
 /* in deparse.c */
 extern void classifyConditions(PlannerInfo *root,

@@ -120,7 +120,7 @@ static void pgfdw_abort_cleanup(ConnCacheEntry *entry, const char *sql,
 static bool UserMappingPasswordRequired(UserMapping *user);
 static bool disconnect_cached_connections(Oid serverid);
 static void pgfdw_prepare_xacts(void);
-static bool pgfdw_commit_prepared(ConnCacheEntry *entry);
+static void pgfdw_commit_prepared(ConnCacheEntry *entry);
 static bool pgfdw_rollback_prepared(ConnCacheEntry *entry);
 static bool pgfdw_two_phase_commit_is_required(void);
 static void pgfdw_insert_xact_commits(List *umids);
@@ -886,7 +886,7 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 	if (!xact_got_connection)
 		return;
 
-	if (pgfdw_two_phase_commit &&
+	if (pgfdw_two_phase_commit > PGFDW_2PC_OFF &&
 		(event == XACT_EVENT_PARALLEL_PRE_COMMIT ||
 		 event == XACT_EVENT_PRE_COMMIT) &&
 		pgfdw_two_phase_commit_is_required())
@@ -1758,33 +1758,34 @@ pgfdw_prepare_xacts(void)
 		pgfdw_insert_xact_commits(umids);
 }
 
-static bool
+static void
 pgfdw_commit_prepared(ConnCacheEntry *entry)
 {
 	char		sql[256];
 	bool		success = false;
 
 	if (!FullTransactionIdIsValid(entry->fxid))
-		return false;
+		return;
 
-	PreparedXactCommand(sql, "COMMIT PREPARED", entry);
-
-	entry->changing_xact_state = true;
-	success = pgfdw_exec_cleanup_query(entry->conn, sql, false);
-	entry->changing_xact_state = false;
-
-	if (entry->have_prep_stmt && entry->have_error && success)
+	if (pgfdw_two_phase_commit == PGFDW_2PC_ON)
 	{
-		PGresult   *res = PQexec(entry->conn, "DEALLOCATE ALL");
+		PreparedXactCommand(sql, "COMMIT PREPARED", entry);
 
-		PQclear(res);
+		entry->changing_xact_state = true;
+		success = pgfdw_exec_cleanup_query(entry->conn, sql, false);
+		entry->changing_xact_state = false;
+
+		if (entry->have_prep_stmt && entry->have_error && success)
+		{
+			PGresult   *res = PQexec(entry->conn, "DEALLOCATE ALL");
+
+			PQclear(res);
+		}
 	}
 
 	entry->have_prep_stmt = false;
 	entry->have_error = false;
 	entry->fxid = InvalidFullTransactionId;
-
-	return true;
 }
 
 static bool
@@ -1817,7 +1818,7 @@ pgfdw_two_phase_commit_is_required(void)
 	ConnCacheEntry *entry;
 	int			nwritten = 0;
 
-	Assert(pgfdw_two_phase_commit);
+	Assert(pgfdw_two_phase_commit > PGFDW_2PC_OFF);
 
 	/*
 	 * Determine that the local transaction is a write one if XID has already
