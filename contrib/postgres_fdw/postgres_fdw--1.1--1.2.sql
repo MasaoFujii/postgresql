@@ -184,3 +184,68 @@ BEGIN
   EXECUTE 'SET ROLE ' || orig_user;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Get the minimum value of full transaction IDs assigned to running
+-- local transactions and foreign prepared (unresolved yet) ones.
+-- This function also returns a list of user mapping OIDs
+-- corresponding to the server that it successfully fetched the minimum
+-- full transaction ID from.
+CREATE OR REPLACE FUNCTION
+  pg_min_fxid_foreign_prepared_xacts_all(OUT fxmin xid8, OUT umids oid[])
+  RETURNS record AS $$
+DECLARE
+  r RECORD;
+  fxid xid8;
+  orig_user name;
+  errmsg TEXT;
+BEGIN
+  orig_user = current_user;
+  fxmin := pg_snapshot_xmin(pg_current_snapshot());
+  FOR r IN
+    SELECT * FROM pg_foreign_data_wrapper fdw,
+      pg_foreign_server fs, pg_user_mappings um
+    WHERE fdw.fdwname = 'postgres_fdw' AND
+      fs.srvfdw = fdw.oid AND fs.oid = um.srvid
+    ORDER BY fs.srvname
+  LOOP
+    IF r.usename = 'public' THEN
+      EXECUTE 'SET ROLE ' || orig_user;
+    ELSIF r.usename <> current_user THEN
+      EXECUTE 'SET ROLE ' || r.usename;
+    END IF;
+
+    BEGIN
+      -- Use min(bigint)::text::xid8 to calculate the minimum value of
+      -- full transaction IDs, for now, instead of min(xid8) because
+      -- PostgreSQL core hasn't supported yet min(xid8) aggregation
+      -- function.
+      SELECT min(split_part(gid, '_', 2)::bigint)::text::xid8 INTO fxid
+        FROM pg_foreign_prepared_xacts(r.srvname);
+      IF fxid IS NOT NULL AND fxid < fxmin THEN
+        fxmin := fxid;
+      END IF;
+      umids := array_append(umids, r.umid);
+    EXCEPTION WHEN OTHERS THEN
+      GET STACKED DIAGNOSTICS errmsg = MESSAGE_TEXT;
+      RAISE NOTICE 'could not resolve foreign prepared transactions on server "%"',
+        r.srvname USING DETAIL = 'Error message: ' || errmsg;
+    END;
+  END LOOP;
+  EXECUTE 'SET ROLE ' || orig_user;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Delete the records no longer necessary to resolve foreign prepared
+-- transactions, from pgfdw_plus.xact_commits. This function returns
+-- the deleted records.
+CREATE OR REPLACE FUNCTION
+  pg_vacuum_xact_commits()
+  RETURNS SETOF pgfdw_plus.xact_commits AS $$
+DECLARE
+  r record;
+BEGIN
+  SELECT * INTO r FROM pg_min_fxid_foreign_prepared_xacts_all();
+  RETURN QUERY DELETE FROM pgfdw_plus.xact_commits xc
+    WHERE xc.fxid < r.fxmin AND xc.umids <@ r.umids RETURNING *;
+END;
+$$ LANGUAGE plpgsql;
