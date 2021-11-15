@@ -227,7 +227,7 @@ BEGIN
       umids := array_append(umids, r.umid);
     EXCEPTION WHEN OTHERS THEN
       GET STACKED DIAGNOSTICS errmsg = MESSAGE_TEXT;
-      RAISE NOTICE 'could not resolve foreign prepared transactions on server "%"',
+      RAISE NOTICE 'could not retrieve minimum full transaction ID from server "%"',
         r.srvname USING DETAIL = 'Error message: ' || errmsg;
     END;
   END LOOP;
