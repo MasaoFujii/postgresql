@@ -4,14 +4,12 @@
 \echo Use "ALTER EXTENSION postgres_fdw UPDATE TO '1.2'" to load this file. \quit
 
 CREATE SCHEMA pgfdw_plus;
-GRANT USAGE ON SCHEMA pgfdw_plus TO public;
 
 CREATE TABLE pgfdw_plus.xact_commits (
   fxid xid8 primary key,
   pid integer,
   umids oid[]
 );
-GRANT SELECT ON pgfdw_plus.xact_commits TO public;
 
 CREATE TYPE resolve_foreign_prepared_xacts AS
   (status text, server name, transaction xid, gid text,
