@@ -8,9 +8,11 @@
 -- ===================================================================
 -- create database users
 -- ===================================================================
-CREATE ROLE regress_pgfdw_plus_super1 SUPERUSER;
-CREATE ROLE regress_pgfdw_plus_super2 SUPERUSER;
-SET ROLE regress_pgfdw_plus_super1;
+CREATE ROLE regress_pgfdw_local_super1 SUPERUSER;
+CREATE ROLE regress_pgfdw_local_super2 SUPERUSER;
+CREATE ROLE regress_pgfdw_remote_super1 SUPERUSER LOGIN;
+CREATE ROLE regress_pgfdw_remote_super2 SUPERUSER LOGIN;
+SET ROLE regress_pgfdw_local_super1;
 
 -- ===================================================================
 -- create FDW objects
@@ -35,8 +37,10 @@ DO $d$
     END;
 $d$;
 
-CREATE USER MAPPING FOR PUBLIC SERVER pgfdw_plus_loopback1;
-CREATE USER MAPPING FOR CURRENT_USER SERVER pgfdw_plus_loopback2;
+CREATE USER MAPPING FOR PUBLIC SERVER pgfdw_plus_loopback1
+  OPTIONS (user 'regress_pgfdw_remote_super1');
+CREATE USER MAPPING FOR CURRENT_USER SERVER pgfdw_plus_loopback2
+  OPTIONS (user 'regress_pgfdw_remote_super2');
 
 -- create dummy foreign data wrapper, server and user mapping
 -- to test the error cases
@@ -196,10 +200,10 @@ SELECT * FROM pg_resolve_foreign_prepared_xacts('nonexistent');
 
 -- should fail because there is no user mapping for specified server and
 -- current user
-SET ROLE regress_pgfdw_plus_super2;
+SET ROLE regress_pgfdw_local_super2;
 SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
 SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
-SET ROLE regress_pgfdw_plus_super1;
+SET ROLE regress_pgfdw_local_super1;
 
 -- should fail because foreign data wrapper of specified server
 -- is not postgres_fdw
@@ -211,17 +215,53 @@ SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
 SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
 
 -- ===================================================================
--- test pg_resolve_foreign_prepared_xacts
+-- test functions to resolve foreign prepared transactions
 -- ===================================================================
 CREATE EXTENSION dblink;
 
-SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
-SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
+-- These functions should return 0 rows because there are no foreign
+-- prepared transactions
+SELECT count(*) FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT count(*) FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
 
--- ===================================================================
--- test pg_resolve_foreign_prepared_xacts_all
--- ===================================================================
-SELECT * FROM pg_resolve_foreign_prepared_xacts_all();
+-- xact_commits should be emptied because there are no foreign
+-- prepared transactions
+SELECT count(*) FROM pgfdw_plus.xact_commits;
+SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus.xact_commits;
+
+-- Set two_phase_commit to 'prepare' to create foreign prepared transactions.
+-- Note that more than two foreign prepared transactions cannot be created
+-- because max_prepared_xacts is set to 2 in regression test.
+SET postgres_fdw.two_phase_commit TO 'prepare';
+BEGIN;
+INSERT INTO ft1 VALUES (101, 101);
+INSERT INTO ft2 VALUES (101, 101);
+COMMIT;
+SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SELECT count(*) FROM pgfdw_plus.xact_commits;
+
+-- Resolve foreign prepared transactions on only one of servers
+SELECT count(*) FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
+
+-- xact_commits still should have one row referencing to foreign prepared
+-- transactions on another server
+SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus.xact_commits;
+
+-- All foreign prepared transactions are resolved and xact_commits
+-- should be empty
+SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus.xact_commits;
+
+RESET postgres_fdw.two_phase_commit;
 
 -- ===================================================================
 -- reset global settings
