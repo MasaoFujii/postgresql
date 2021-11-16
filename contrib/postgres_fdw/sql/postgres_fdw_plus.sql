@@ -189,6 +189,15 @@ RESET debug_discard_caches;
 -- ===================================================================
 -- test error cases of pg_foreign_prepared_xacts
 -- ===================================================================
+-- should fail because specified server doesn't exist
+SELECT * FROM pg_foreign_prepared_xacts('nonexistent');
+
+-- should fail because there is no user mapping for specified server and
+-- current user
+SET ROLE regress_pgfdw_plus_super2;
+SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SET ROLE regress_pgfdw_plus_super1;
+
 -- should fail because foreign data wrapper of specified server
 -- is not postgres_fdw
 SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_dummy_server');
