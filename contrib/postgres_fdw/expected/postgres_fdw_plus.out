@@ -371,6 +371,9 @@ SET ROLE regress_pgfdw_plus_super1;
 -- is not postgres_fdw
 SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_dummy_server');
 ERROR:  foreign data wrapper of specified server must be "postgres_fdw"
+-- should fail because dblink has not been installed yet
+SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
+ERROR:  extension "dblink" must be installed
 -- ===================================================================
 -- test pg_resolve_foreign_prepared_xacts
 -- ===================================================================

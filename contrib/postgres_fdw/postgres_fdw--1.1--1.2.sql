@@ -33,6 +33,10 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'foreign data wrapper of specified server must be "postgres_fdw"';
   END IF;
+  PERFORM * FROM pg_extension WHERE extname = 'dblink';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'extension "dblink" must be installed';
+  END IF;
   sql := 'SELECT * FROM pg_prepared_xacts ' ||
     'WHERE owner = current_user AND database = current_database() ' ||
     'AND gid LIKE ''pgfdw_%_%_%_' || current_setting('cluster_name') || '''';
