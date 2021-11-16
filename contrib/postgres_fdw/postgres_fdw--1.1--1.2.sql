@@ -27,6 +27,12 @@ BEGIN
     RAISE EXCEPTION 'user mapping for server "%" and user "%" not found',
       server, current_user;
   END IF;
+  PERFORM * FROM pg_foreign_server fs, pg_foreign_data_wrapper fdw
+    WHERE fs.srvfdw = fdw.oid AND fs.srvname = server AND
+      fdw.fdwname = 'postgres_fdw';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'foreign data wrapper of specified server must be "postgres_fdw"';
+  END IF;
   sql := 'SELECT * FROM pg_prepared_xacts ' ||
     'WHERE owner = current_user AND database = current_database() ' ||
     'AND gid LIKE ''pgfdw_%_%_%_' || current_setting('cluster_name') || '''';

@@ -32,6 +32,11 @@ DO $d$
 $d$;
 CREATE USER MAPPING FOR PUBLIC SERVER pgfdw_plus_loopback1;
 CREATE USER MAPPING FOR CURRENT_USER SERVER pgfdw_plus_loopback2;
+-- create dummy foreign data wrapper, server and user mapping
+-- to test the error cases
+CREATE FOREIGN DATA WRAPPER pgfdw_plus_dummy;
+CREATE SERVER pgfdw_plus_dummy_server FOREIGN DATA WRAPPER pgfdw_plus_dummy;
+CREATE USER MAPPING FOR PUBLIC SERVER pgfdw_plus_dummy_server;
 -- ===================================================================
 -- create objects used by local transaction or through FDW
 -- pgfdw_plus_loopback1 and pgfdw_plus_loopback2 servers
@@ -350,6 +355,13 @@ SELECT count(*) FROM ft2 WHERE c1 = 700;
 
 RESET postgres_fdw.two_phase_commit;
 RESET debug_discard_caches;
+-- ===================================================================
+-- test error cases of pg_foreign_prepared_xacts
+-- ===================================================================
+-- should fail because foreign data wrapper of specified server
+-- is not postgres_fdw
+SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_dummy_server');
+ERROR:  foreign data wrapper of specified server must be "postgres_fdw"
 -- ===================================================================
 -- test pg_resolve_foreign_prepared_xacts
 -- ===================================================================
