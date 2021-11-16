@@ -48,6 +48,12 @@ CREATE FOREIGN DATA WRAPPER pgfdw_plus_dummy;
 CREATE SERVER pgfdw_plus_dummy_server FOREIGN DATA WRAPPER pgfdw_plus_dummy;
 CREATE USER MAPPING FOR PUBLIC SERVER pgfdw_plus_dummy_server;
 
+-- drop previously-created server that may have unexpected effect
+-- on this test, to make the test stable
+SET client_min_messages TO 'error';
+DROP SERVER IF EXISTS testserver1 CASCADE;
+RESET client_min_messages;
+
 -- ===================================================================
 -- create objects used by local transaction or through FDW
 -- pgfdw_plus_loopback1 and pgfdw_plus_loopback2 servers

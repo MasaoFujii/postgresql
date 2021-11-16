@@ -41,6 +41,11 @@ CREATE USER MAPPING FOR CURRENT_USER SERVER pgfdw_plus_loopback2
 CREATE FOREIGN DATA WRAPPER pgfdw_plus_dummy;
 CREATE SERVER pgfdw_plus_dummy_server FOREIGN DATA WRAPPER pgfdw_plus_dummy;
 CREATE USER MAPPING FOR PUBLIC SERVER pgfdw_plus_dummy_server;
+-- drop previously-created server that may have unexpected effect
+-- on this test, to make the test stable
+SET client_min_messages TO 'error';
+DROP SERVER IF EXISTS testserver1 CASCADE;
+RESET client_min_messages;
 -- ===================================================================
 -- create objects used by local transaction or through FDW
 -- pgfdw_plus_loopback1 and pgfdw_plus_loopback2 servers
@@ -406,8 +411,6 @@ SELECT count(*) FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
 (1 row)
 
 SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
-NOTICE:  could not resolve foreign prepared transactions on server "testserver1"
-DETAIL:  Error message: could not establish connection
  count 
 -------
      0
@@ -422,8 +425,6 @@ SELECT count(*) FROM pgfdw_plus.xact_commits;
 (1 row)
 
 SELECT count(*) FROM pg_vacuum_xact_commits();
-NOTICE:  could not retrieve minimum full transaction ID from server "testserver1"
-DETAIL:  Error message: could not establish connection
  count 
 -------
      3
@@ -483,8 +484,6 @@ SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
 -- xact_commits still should have one row referencing to foreign prepared
 -- transactions on another server
 SELECT count(*) FROM pg_vacuum_xact_commits();
-NOTICE:  could not retrieve minimum full transaction ID from server "testserver1"
-DETAIL:  Error message: could not establish connection
  count 
 -------
      0
@@ -499,8 +498,6 @@ SELECT count(*) FROM pgfdw_plus.xact_commits;
 -- All foreign prepared transactions are resolved and xact_commits
 -- should be empty
 SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
-NOTICE:  could not resolve foreign prepared transactions on server "testserver1"
-DETAIL:  Error message: could not establish connection
  count 
 -------
      1
@@ -519,8 +516,6 @@ SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
 (1 row)
 
 SELECT count(*) FROM pg_vacuum_xact_commits();
-NOTICE:  could not retrieve minimum full transaction ID from server "testserver1"
-DETAIL:  Error message: could not establish connection
  count 
 -------
      1
