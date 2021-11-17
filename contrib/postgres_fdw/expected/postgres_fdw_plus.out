@@ -527,6 +527,12 @@ SELECT count(*) FROM pgfdw_plus.xact_commits;
      0
 (1 row)
 
+-- should fail because pg_vacuum_xact_commits() cannot be executed
+-- in read-only transaction
+BEGIN READ ONLY;
+SELECT count(*) FROM pg_vacuum_xact_commits();
+ERROR:  cannot execute pg_vacuum_xact_commits() in a read-only transaction
+COMMIT;
 RESET postgres_fdw.two_phase_commit;
 -- ===================================================================
 -- reset global settings

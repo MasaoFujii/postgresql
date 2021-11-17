@@ -252,6 +252,9 @@ CREATE OR REPLACE FUNCTION
 DECLARE
   r record;
 BEGIN
+  IF current_setting('transaction_read_only')::boolean THEN
+    RAISE EXCEPTION 'cannot execute pg_vacuum_xact_commits() in a read-only transaction';
+  END IF;
   SELECT * INTO r FROM pg_min_fxid_foreign_prepared_xacts_all();
   RETURN QUERY DELETE FROM pgfdw_plus.xact_commits xc
     WHERE xc.fxid < r.fxmin AND xc.umids <@ r.umids RETURNING *;

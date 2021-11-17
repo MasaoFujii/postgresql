@@ -267,6 +267,12 @@ SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
 SELECT count(*) FROM pg_vacuum_xact_commits();
 SELECT count(*) FROM pgfdw_plus.xact_commits;
 
+-- should fail because pg_vacuum_xact_commits() cannot be executed
+-- in read-only transaction
+BEGIN READ ONLY;
+SELECT count(*) FROM pg_vacuum_xact_commits();
+COMMIT;
+
 RESET postgres_fdw.two_phase_commit;
 
 -- ===================================================================
