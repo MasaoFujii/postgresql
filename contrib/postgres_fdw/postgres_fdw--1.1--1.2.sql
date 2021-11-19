@@ -157,6 +157,33 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Set the current user to the proper user, to connect to the foreign
+-- server based on the user mapping.
+CREATE OR REPLACE FUNCTION
+  pg_set_role_with_user_mapping(orig name, usename name)
+  RETURNS void AS $$
+DECLARE
+  dest name := NULL;
+  errmsg TEXT;
+BEGIN
+  IF usename = 'public' THEN
+    dest := orig;
+  ELSIF usename <> current_user THEN
+    dest := usename;
+  ELSE
+    RETURN;
+  END IF;
+
+  BEGIN
+    EXECUTE 'SET ROLE ' || dest;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS errmsg = MESSAGE_TEXT;
+    RAISE NOTICE 'could not set current user to user "%"',
+      dest USING DETAIL = 'Error message: ' || errmsg;
+  END;
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE OR REPLACE FUNCTION
   pg_resolve_foreign_prepared_xacts_all(force boolean DEFAULT false)
   RETURNS SETOF resolve_foreign_prepared_xacts AS $$
@@ -173,11 +200,7 @@ BEGIN
       fs.srvfdw = fdw.oid AND fs.oid = um.srvid
     ORDER BY fs.srvname
   LOOP
-    IF r.usename = 'public' THEN
-      EXECUTE 'SET ROLE ' || orig_user;
-    ELSIF r.usename <> current_user THEN
-      EXECUTE 'SET ROLE ' || r.usename;
-    END IF;
+    PERFORM pg_set_role_with_user_mapping(orig_user, r.usename);
 
     BEGIN
       RETURN QUERY SELECT *
@@ -215,11 +238,7 @@ BEGIN
       fs.srvfdw = fdw.oid AND fs.oid = um.srvid
     ORDER BY fs.srvname
   LOOP
-    IF r.usename = 'public' THEN
-      EXECUTE 'SET ROLE ' || orig_user;
-    ELSIF r.usename <> current_user THEN
-      EXECUTE 'SET ROLE ' || r.usename;
-    END IF;
+    PERFORM pg_set_role_with_user_mapping(orig_user, r.usename);
 
     BEGIN
       -- Use min(bigint)::text::xid8 to calculate the minimum value of
