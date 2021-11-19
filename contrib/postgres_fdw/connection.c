@@ -1850,15 +1850,14 @@ pgfdw_two_phase_commit_is_required(void)
 /* Macros for pgfdw_plus.xact_commits table to track transaction commits */
 #define PGFDW_PLUS_SCHEMA	"pgfdw_plus"
 #define PGFDW_PLUS_XACT_COMMITS_TABLE	"xact_commits"
-#define PGFDW_PLUS_XACT_COMMITS_COLS	3
+#define PGFDW_PLUS_XACT_COMMITS_COLS	2
 
 /*
- * Insert the following three information about the current local
+ * Insert the following two information about the current local
  * transaction into PGFDW_PLUS_XACT_COMMITS_TABLE table.
  *
  * 1. The full transaction ID of the current local transaction.
- * 2. PID of the backend running the current local transaction.
- * 3. Array of user mapping OID corresponding to a foreign transaction
+ * 2. Array of user mapping OID corresponding to a foreign transaction
  *    that the current local transaction started. The list of
  *    these user mapping OIDs needs to be specified in the argument
  *    "umids". This list must not be NIL.
@@ -1888,7 +1887,6 @@ pgfdw_insert_xact_commits(List *umids)
 	MemSet(nulls, 0, sizeof(nulls));
 
 	values[0] = FullTransactionIdGetDatum(GetTopFullTransactionId());
-	values[1] = Int32GetDatum(MyProcPid);
 
 	/* Convert a list of umid to an oid[] Datum */
 	ndatums = list_length(umids);
@@ -1901,7 +1899,7 @@ pgfdw_insert_xact_commits(List *umids)
 	}
 	arr = construct_array(datums, ndatums, OIDOID, sizeof(Oid),
 						  true, TYPALIGN_INT);
-	values[2] = PointerGetDatum(arr);
+	values[1] = PointerGetDatum(arr);
 
 	/*
 	 * Look up the schema and table to store transaction commits

@@ -7,7 +7,6 @@ CREATE SCHEMA pgfdw_plus;
 
 CREATE TABLE pgfdw_plus.xact_commits (
   fxid xid8 primary key,
-  pid integer,
   umids oid[]
 );
 
