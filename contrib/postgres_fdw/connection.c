@@ -1729,7 +1729,7 @@ pgfdw_prepare_xacts(void)
 {
 	HASH_SEQ_STATUS scan;
 	ConnCacheEntry *entry;
-	List		*umids = NIL;
+	List	   *umids = NIL;
 
 	hash_seq_init(&scan, ConnectionHash);
 	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
@@ -1768,8 +1768,8 @@ pgfdw_commit_prepared(ConnCacheEntry *entry)
 		return;
 
 	/*
-	 * If two_phase_commit is off, entry->fxid should be invalid,
-	 * so we should never reach here.
+	 * If two_phase_commit is off, entry->fxid should be invalid, so we should
+	 * never reach here.
 	 */
 	Assert(pgfdw_two_phase_commit > PGFDW_2PC_OFF);
 
@@ -1783,16 +1783,17 @@ pgfdw_commit_prepared(ConnCacheEntry *entry)
 	}
 
 	/*
-	 * Do a DEALLOCATE ALL to make sure we get rid of all prepared
-	 * statements. See comments in pgfdw_xact_callback().
+	 * Do a DEALLOCATE ALL to make sure we get rid of all prepared statements.
+	 * See comments in pgfdw_xact_callback().
 	 *
-	 * If COMMIT PREPARED fails, we don't do a DEALLOCATE ALL because
-	 * it's also likely to fail or may get stuck (especially when
+	 * If COMMIT PREPARED fails, we don't do a DEALLOCATE ALL because it's
+	 * also likely to fail or may get stuck (especially when
 	 * pgfdw_exec_cleanup_query() reports failure because of a timeout).
 	 */
 	if (entry->have_prep_stmt && entry->have_error && success)
 	{
 		PGresult   *res = PQexec(entry->conn, "DEALLOCATE ALL");
+
 		PQclear(res);
 	}
 	entry->have_prep_stmt = false;
@@ -1888,8 +1889,8 @@ pgfdw_insert_xact_commits(List *umids)
 	int			ndatums;
 	ArrayType  *arr;
 	ListCell   *lc;
-	Oid		namespaceId;
-	Oid		relId;
+	Oid			namespaceId;
+	Oid			relId;
 	Relation	rel;
 	HeapTuple	tup;
 
@@ -1906,7 +1907,8 @@ pgfdw_insert_xact_commits(List *umids)
 	ndatums = 0;
 	foreach(lc, umids)
 	{
-		Oid	umid = lfirst_oid(lc);
+		Oid			umid = lfirst_oid(lc);
+
 		datums[ndatums++] = ObjectIdGetDatum(umid);
 	}
 	arr = construct_array(datums, ndatums, OIDOID, sizeof(Oid),
@@ -1914,9 +1916,9 @@ pgfdw_insert_xact_commits(List *umids)
 	values[1] = PointerGetDatum(arr);
 
 	/*
-	 * Look up the schema and table to store transaction commits
-	 * information. Note that we don't verify we have enough permissions
-	 * on them, nor run object access hooks for them.
+	 * Look up the schema and table to store transaction commits information.
+	 * Note that we don't verify we have enough permissions on them, nor run
+	 * object access hooks for them.
 	 */
 	namespaceId = get_namespace_oid(PGFDW_PLUS_SCHEMA, false);
 	relId = get_relname_relid(PGFDW_PLUS_XACT_COMMITS_TABLE, namespaceId);

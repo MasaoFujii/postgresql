@@ -49,7 +49,7 @@ static PQconninfoOption *libpq_options;
  * GUC parameters
  */
 char	   *pgfdw_application_name = NULL;
-int		pgfdw_two_phase_commit = false;
+int			pgfdw_two_phase_commit = false;
 bool		pgfdw_track_xact_commits = true;
 
 /*
