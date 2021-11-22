@@ -276,6 +276,49 @@ COMMIT;
 RESET postgres_fdw.two_phase_commit;
 
 -- ===================================================================
+-- test that DEALLOCATE ALL is executed properly even when
+-- two_phase_commit is on or prepare.
+-- ===================================================================
+SET debug_discard_caches = 0;
+SET postgres_fdw.two_phase_commit TO true;
+
+-- DEALLOCATE ALL should follow COMMIT PREPARED because
+-- a subtransaction is aborted.
+BEGIN;
+SAVEPOINT s;
+INSERT INTO ft1 VALUES (111, 111);
+INSERT INTO ft2 VALUES (111, 111);
+ROLLBACK TO SAVEPOINT s;
+COMMIT;
+SELECT split_part(query, '_', 1) FROM pg_stat_activity
+    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+
+-- DEALLOCATE ALL should follow PREPARE TRANSACTION
+-- if a subtransaction is aborted and two_phase_commit is set to 'prepare'.
+SET postgres_fdw.two_phase_commit TO 'prepare';
+BEGIN;
+SAVEPOINT s;
+INSERT INTO ft1 VALUES (112, 112);
+INSERT INTO ft2 VALUES (112, 112);
+ROLLBACK TO SAVEPOINT s;
+COMMIT;
+SELECT split_part(query, '_', 1) FROM pg_stat_activity
+    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+
+-- DEALLOCATE ALL should not run because a subtransaction is not aborted.
+BEGIN;
+INSERT INTO ft1 VALUES (113, 113);
+INSERT INTO ft2 VALUES (113, 113);
+COMMIT;
+SELECT split_part(query, '_', 1) FROM pg_stat_activity
+    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+
+RESET postgres_fdw.two_phase_commit;
+RESET debug_discard_caches;
+
+-- ===================================================================
 -- reset global settings
 -- ===================================================================
 \unset SHOW_CONTEXT

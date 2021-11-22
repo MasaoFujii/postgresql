@@ -1762,10 +1762,16 @@ static void
 pgfdw_commit_prepared(ConnCacheEntry *entry)
 {
 	char		sql[256];
-	bool		success = false;
+	bool		success = true;
 
 	if (!FullTransactionIdIsValid(entry->fxid))
 		return;
+
+	/*
+	 * If two_phase_commit is off, entry->fxid should be invalid,
+	 * so we should never reach here.
+	 */
+	Assert(pgfdw_two_phase_commit > PGFDW_2PC_OFF);
 
 	if (pgfdw_two_phase_commit == PGFDW_2PC_ON)
 	{
@@ -1774,15 +1780,21 @@ pgfdw_commit_prepared(ConnCacheEntry *entry)
 		entry->changing_xact_state = true;
 		success = pgfdw_exec_cleanup_query(entry->conn, sql, false);
 		entry->changing_xact_state = false;
-
-		if (entry->have_prep_stmt && entry->have_error && success)
-		{
-			PGresult   *res = PQexec(entry->conn, "DEALLOCATE ALL");
-
-			PQclear(res);
-		}
 	}
 
+	/*
+	 * Do a DEALLOCATE ALL to make sure we get rid of all prepared
+	 * statements. See comments in pgfdw_xact_callback().
+	 *
+	 * If COMMIT PREPARED fails, we don't do a DEALLOCATE ALL because
+	 * it's also likely to fail or may get stuck (especially when
+	 * pgfdw_exec_cleanup_query() reports failure because of a timeout).
+	 */
+	if (entry->have_prep_stmt && entry->have_error && success)
+	{
+		PGresult   *res = PQexec(entry->conn, "DEALLOCATE ALL");
+		PQclear(res);
+	}
 	entry->have_prep_stmt = false;
 	entry->have_error = false;
 	entry->fxid = InvalidFullTransactionId;
