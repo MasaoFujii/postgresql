@@ -122,6 +122,7 @@ static bool disconnect_cached_connections(Oid serverid);
 static void pgfdw_prepare_xacts(void);
 static void pgfdw_commit_prepared(ConnCacheEntry *entry);
 static bool pgfdw_rollback_prepared(ConnCacheEntry *entry);
+static void pgfdw_deallocate_all(ConnCacheEntry *entry);
 static bool pgfdw_two_phase_commit_is_required(void);
 static void pgfdw_insert_xact_commits(List *umids);
 
@@ -1783,22 +1784,12 @@ pgfdw_commit_prepared(ConnCacheEntry *entry)
 	}
 
 	/*
-	 * Do a DEALLOCATE ALL to make sure we get rid of all prepared statements.
-	 * See comments in pgfdw_xact_callback().
-	 *
 	 * If COMMIT PREPARED fails, we don't do a DEALLOCATE ALL because it's
 	 * also likely to fail or may get stuck (especially when
 	 * pgfdw_exec_cleanup_query() reports failure because of a timeout).
 	 */
-	if (entry->have_prep_stmt && entry->have_error && success)
-	{
-		PGresult   *res = PQexec(entry->conn, "DEALLOCATE ALL");
-
-		PQclear(res);
-	}
-	entry->have_prep_stmt = false;
-	entry->have_error = false;
-	entry->fxid = InvalidFullTransactionId;
+	if (success)
+		pgfdw_deallocate_all(entry);
 }
 
 static bool
@@ -1809,10 +1800,35 @@ pgfdw_rollback_prepared(ConnCacheEntry *entry)
 	if (!FullTransactionIdIsValid(entry->fxid))
 		return false;
 
-	PreparedXactCommand(sql, "ROLLBACK PREPARED", entry);
-	pgfdw_abort_cleanup(entry, sql, true);
+	/*
+	 * If two_phase_commit is off, entry->fxid should be invalid, so we should
+	 * never reach here.
+	 */
+	Assert(pgfdw_two_phase_commit > PGFDW_2PC_OFF);
+
+	if (pgfdw_two_phase_commit == PGFDW_2PC_ON)
+	{
+		PreparedXactCommand(sql, "ROLLBACK PREPARED", entry);
+		pgfdw_abort_cleanup(entry, sql, true);
+	}
+	else
+		pgfdw_deallocate_all(entry);
 
 	return true;
+}
+
+/*
+ * Do a DEALLOCATE ALL to make sure we get rid of all prepared statements.
+ * See comments in pgfdw_xact_callback().
+ */
+static void
+pgfdw_deallocate_all(ConnCacheEntry *entry)
+{
+	if (entry->have_prep_stmt && entry->have_error)
+		pgfdw_exec_cleanup_query(entry->conn, "DEALLOCATE ALL", true);
+
+	entry->have_prep_stmt = false;
+	entry->have_error = false;
 }
 
 /*
