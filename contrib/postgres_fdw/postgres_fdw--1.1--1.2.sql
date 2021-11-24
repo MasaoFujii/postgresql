@@ -85,6 +85,7 @@ DECLARE
   sql TEXT;
   full_xid xid8;
   pid integer;
+  connected boolean := false;
 BEGIN
   FOR r IN SELECT NULL AS status, server, *
     FROM pg_foreign_prepared_xacts(server) LOOP
@@ -151,9 +152,24 @@ BEGIN
 
     IF sql IS NOT NULL THEN
       RETURN NEXT r;
-      PERFORM dblink(server, sql);
+
+      -- Use dblink_connect() and dblink_exec() here instead of dblink()
+      -- so that we can establish new connection to the foreign server
+      -- only once and reuse that connection to execute the transaction
+      -- command. This would decrease the number of connection establishments
+      -- and improve the performance of this function especially
+      -- when there are lots of foreign prepared transactions to resolve.
+      IF NOT connected THEN
+        PERFORM dblink_connect('pgfdw_plus_conn', server);
+	connected := true;
+      END IF;
+      PERFORM dblink_exec('pgfdw_plus_conn', sql);
     END IF;
   END LOOP;
+
+  IF connected THEN
+    PERFORM dblink_disconnect('pgfdw_plus_conn');
+  END IF;
 END;
 $$ LANGUAGE plpgsql;
 
