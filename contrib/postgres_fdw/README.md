@@ -3,14 +3,24 @@
 ## Configuration Parameters
 
 ### postgres_fdw.two_phase_commit (enum)
-If true, a local transaction and all foreign transactions that
-it opened on remote servers via postgres_fdw_plus are committed
-by using two phase commit protocol, when it's committed.
-If false (default), they are committed as postgres_fdw currently does,
-i.e., two phase commit protocol is not used. If "prepare",
-all those foreign transactions are marked as prepared, but not
-committed, i.e., postgres_fdw_plus issues PREPARE TRANSACTION
-but not COMMIT PREPARED for them on remote servers.
+If true, only foreign transactions writing data on remote servers are
+committed by using two phase commit protocol (2PC). 2PC is not used
+for read-only foreign transactions. If always, all foreign transactions
+including even read-only ones are committed via 2PC.
+If false (default), all foreign transactions are committed as
+postgres_fdw currently does, i.e., 2PC is not used at all.
+
+Any users can change this setting.
+
+### postgres_fdw.skip_commit_phase (boolean)
+If true, foreign transactions to be processed via two phase commit
+protocol are marked just as prepared, but not actually committed,
+i.e., prepare phase is performed but commit phase not. This setting
+is useful to create foreign prepared transactions purposely for
+the test or debug, for example. Those foreign prepared transactions
+are expected to be committed or rollbacked by the functions to
+resolve them. If false (default), both phases are performed in 2PC.
+This setting has no effect if postgres_fdw.two_phase_commit is false.
 
 Any users can change this setting.
 

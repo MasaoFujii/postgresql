@@ -1,12 +1,16 @@
 -- ===================================================================
--- global settings
+-- Global settings
 -- ===================================================================
 -- Don't display CONTEXT fields in messages from the server,
 -- to make the tests stable.
 \set SHOW_CONTEXT never
 
+-- Don't drop remote connections after every transaction,
+-- to make the tests stable.
+SET debug_discard_caches = 0;
+
 -- ===================================================================
--- create database users
+-- Create database users
 -- ===================================================================
 CREATE ROLE regress_pgfdw_local_super1 SUPERUSER;
 CREATE ROLE regress_pgfdw_local_super2 SUPERUSER;
@@ -15,10 +19,10 @@ CREATE ROLE regress_pgfdw_remote_super2 SUPERUSER LOGIN;
 SET ROLE regress_pgfdw_local_super1;
 
 -- ===================================================================
--- create FDW objects
+-- Create FDW objects
 -- ===================================================================
 
--- postgres_fdw was already installed in postgres_fdw.sql
+-- postgres_fdw was already installed in postgres_fdw.sql.
 
 DO $d$
     BEGIN
@@ -42,283 +46,264 @@ CREATE USER MAPPING FOR PUBLIC SERVER pgfdw_plus_loopback1
 CREATE USER MAPPING FOR CURRENT_USER SERVER pgfdw_plus_loopback2
   OPTIONS (user 'regress_pgfdw_remote_super2');
 
--- create dummy foreign data wrapper, server and user mapping
--- to test the error cases
+-- Create dummy foreign data wrapper, server and user mapping
+-- to test the error cases.
 CREATE FOREIGN DATA WRAPPER pgfdw_plus_dummy;
 CREATE SERVER pgfdw_plus_dummy_server FOREIGN DATA WRAPPER pgfdw_plus_dummy;
 CREATE USER MAPPING FOR PUBLIC SERVER pgfdw_plus_dummy_server;
 
--- drop previously-created server that may have unexpected effect
--- on this test, to make the test stable
+-- Drop previously-created server that may have unexpected effect
+-- on this test, to make the tests stable.
 SET client_min_messages TO 'error';
 DROP SERVER IF EXISTS testserver1 CASCADE;
 RESET client_min_messages;
 
 -- ===================================================================
--- create objects used by local transaction or through FDW
+-- Create objects used by local transaction or through FDW
 -- pgfdw_plus_loopback1 and pgfdw_plus_loopback2 servers
 -- ===================================================================
 CREATE SCHEMA regress_pgfdw_plus;
 SET search_path TO regress_pgfdw_plus, "$user", public;
 
-CREATE TABLE t0 (c1 int PRIMARY KEY, c2 int);
-CREATE TABLE t1 (c1 int PRIMARY KEY, c2 int);
-CREATE TABLE t2 (c1 int PRIMARY KEY, c2 int);
+CREATE TABLE t0 (c1 int PRIMARY KEY);
+CREATE TABLE t1 (c1 int PRIMARY KEY);
+CREATE TABLE t2 (c1 int PRIMARY KEY);
 
--- Disable autovacuum for these tables to avoid unexpected effects of that
+-- Disable autovacuum for these tables to avoid unexpected effects of that.
 ALTER TABLE t0 SET (autovacuum_enabled = 'false');
 ALTER TABLE t1 SET (autovacuum_enabled = 'false');
 ALTER TABLE t2 SET (autovacuum_enabled = 'false');
 
-INSERT INTO t0 SELECT id, id FROM generate_series(1, 10) id;
-INSERT INTO t1 SELECT id, id FROM generate_series(11, 20) id;
-INSERT INTO t2 SELECT id, id FROM generate_series(21, 30) id;
-
-ANALYZE t0;
-ANALYZE t1;
-ANALYZE t2;
-
 -- ===================================================================
--- create foreign tables
+-- Create foreign tables
 -- ===================================================================
-CREATE FOREIGN TABLE ft1 (c1 int, c2 int) SERVER pgfdw_plus_loopback1
+CREATE FOREIGN TABLE ft1 (c1 int) SERVER pgfdw_plus_loopback1
     OPTIONS (schema_name 'regress_pgfdw_plus', table_name 't1');
-CREATE FOREIGN TABLE ft2 (c1 int, c2 int) SERVER pgfdw_plus_loopback2
+CREATE FOREIGN TABLE ft2 (c1 int) SERVER pgfdw_plus_loopback2
     OPTIONS (schema_name 'regress_pgfdw_plus', table_name 't2');
 
+CREATE VIEW ftv AS SELECT * FROM t0 UNION ALL
+  SELECT * FROM ft1 UNION ALL SELECT * FROM ft2;
+
 -- ===================================================================
--- test two phase commit
+-- Test two phase commit
 -- ===================================================================
-SET debug_discard_caches = 0;
 SET postgres_fdw.two_phase_commit TO true;
 
--- All three transactions are committed via two phase commit
--- protocol because they are write transactions.
+-- COMMIT command on local transaction causes foreign transactions to
+-- be committed via two phase commit protocol.
 BEGIN;
-INSERT INTO t0 VALUES (100, 100);
-INSERT INTO ft1 VALUES (100, 100);
-INSERT INTO ft2 VALUES (100, 100);
+INSERT INTO t0 VALUES (100);
+INSERT INTO ft1 VALUES (100);
+INSERT INTO ft2 VALUES (100);
 COMMIT;
 SELECT split_part(query, '_', 1) FROM pg_stat_activity
-    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+    WHERE application_name LIKE 'pgfdw_plus_loopback%' ORDER BY query;
 SELECT * FROM pg_prepared_xacts;
-SELECT count(*) FROM t0 WHERE c1 = 100;
-SELECT count(*) FROM ft1 WHERE c1 = 100;
-SELECT count(*) FROM ft2 WHERE c1 = 100;
+SELECT count(*) FROM ftv WHERE c1 = 100;
+SELECT array_length(umids, 1) FROM pgfdw_plus.xact_commits ORDER BY fxid;
 
--- All three transactions are committed via two phase commit protocol
--- because two (local and foreign) of them are write transactions.
+-- ROLLBACK command on local transaction causes foreign transactions to
+-- be rollbacked without using two phase commit protocol.
 BEGIN;
-INSERT INTO t0 VALUES (200, 200);
-INSERT INTO ft1 VALUES (200, 200);
-SELECT count(*) FROM ft2;
-COMMIT;
-SELECT split_part(query, '_', 1) FROM pg_stat_activity
-    WHERE application_name LIKE 'pgfdw_plus_loopback%';
-SELECT * FROM pg_prepared_xacts;
-SELECT count(*) FROM t0 WHERE c1 = 200;
-SELECT count(*) FROM ft1 WHERE c1 = 200;
-
--- All three transactions are committed via two phase commit protocol
--- because two (two foreign) of them are write transactions.
-BEGIN;
-SELECT count(*) FROM t0;
-INSERT INTO ft1 VALUES (300, 300);
-INSERT INTO ft2 VALUES (300, 300);
-COMMIT;
-SELECT split_part(query, '_', 1) FROM pg_stat_activity
-    WHERE application_name LIKE 'pgfdw_plus_loopback%';
-SELECT * FROM pg_prepared_xacts;
-SELECT count(*) FROM ft1 WHERE c1 = 300;
-SELECT count(*) FROM ft2 WHERE c1 = 300;
-
--- All three transactions are committed without using two phase commit
--- protocol because only local transaction is write one.
-BEGIN;
-INSERT INTO t0 VALUES (400, 400);
-SELECT count(*) FROM ft1;
-SELECT count(*) FROM ft2;
-COMMIT;
-SELECT split_part(query, '_', 1) FROM pg_stat_activity
-    WHERE application_name LIKE 'pgfdw_plus_loopback%';
-SELECT count(*) FROM t0 WHERE c1 = 400;
-
--- All three transactions are committed without using two phase commit
--- protocol because only one foreign transaction is write one.
-BEGIN;
-SELECT count(*) FROM t0;
-INSERT INTO ft1 VALUES (500, 500);
-SELECT count(*) FROM ft2;
-COMMIT;
-SELECT split_part(query, '_', 1) FROM pg_stat_activity
-    WHERE application_name LIKE 'pgfdw_plus_loopback%';
-SELECT count(*) FROM ft1 WHERE c1 = 500;
-
--- All three transactions are committed without using two phase commit
--- protocol because there are no write transactions.
-BEGIN;
-SELECT count(*) FROM t0;
-SELECT count(*) FROM ft1;
-SELECT count(*) FROM ft2;
-COMMIT;
-SELECT split_part(query, '_', 1) FROM pg_stat_activity
-    WHERE application_name LIKE 'pgfdw_plus_loopback%';
-
--- When local transaction is rollbacked, foreign transactions are
--- rollbacked without using two phase commit protocol.
-BEGIN;
-INSERT INTO t0 VALUES (600, 600);
-INSERT INTO ft1 VALUES (600, 600);
-INSERT INTO ft2 VALUES (600, 600);
+INSERT INTO t0 VALUES (110);
+INSERT INTO ft1 VALUES (110);
+INSERT INTO ft2 VALUES (110);
 ROLLBACK;
 SELECT split_part(query, '_', 1) FROM pg_stat_activity
-    WHERE application_name LIKE 'pgfdw_plus_loopback%';
-SELECT count(*) FROM t0 WHERE c1 = 600;
-SELECT count(*) FROM ft1 WHERE c1 = 600;
-SELECT count(*) FROM ft2 WHERE c1 = 600;
+    WHERE application_name LIKE 'pgfdw_plus_loopback%' ORDER BY query;
+SELECT * FROM pg_prepared_xacts;
+SELECT count(*) FROM ftv WHERE c1 = 110;
+SELECT array_length(umids, 1) FROM pgfdw_plus.xact_commits ORDER BY fxid;
 
--- All three transactions are rollbacked because PREPARE TRANSACTION
--- fails on one of foreign server.
+-- Failure of prepare phase on one of foreign servers causes
+-- all transactions to be rollbacked.
 BEGIN;
-INSERT INTO t0 VALUES (700, 700);
-INSERT INTO ft1 VALUES (700, 700);
-INSERT INTO ft2 VALUES (700, 700);
+INSERT INTO t0 VALUES (120);
+INSERT INTO ft1 VALUES (120);
+INSERT INTO ft2 VALUES (120);
 SELECT pg_terminate_backend(pid, 10000) FROM pg_stat_activity
-       WHERE application_name = 'pgfdw_plus_loopback2';
+    WHERE application_name = 'pgfdw_plus_loopback1';
 COMMIT;
 SELECT split_part(query, '_', 1) FROM pg_stat_activity
-    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+    WHERE application_name LIKE 'pgfdw_plus_loopback%' ORDER BY query;
 SELECT * FROM pg_prepared_xacts;
-SELECT count(*) FROM t0 WHERE c1 = 700;
-SELECT count(*) FROM ft1 WHERE c1 = 700;
-SELECT count(*) FROM ft2 WHERE c1 = 700;
+SELECT count(*) FROM ftv WHERE c1 = 120;
+SELECT array_length(umids, 1) FROM pgfdw_plus.xact_commits ORDER BY fxid;
 
-RESET postgres_fdw.two_phase_commit;
-RESET debug_discard_caches;
+-- Failure of prepare phase on the other foreign server causes
+-- all transactions to be rollbacked.
+BEGIN;
+INSERT INTO t0 VALUES (130);
+INSERT INTO ft1 VALUES (130);
+INSERT INTO ft2 VALUES (130);
+SELECT pg_terminate_backend(pid, 10000) FROM pg_stat_activity
+    WHERE application_name = 'pgfdw_plus_loopback2';
+COMMIT;
+SELECT split_part(query, '_', 1) FROM pg_stat_activity
+    WHERE application_name LIKE 'pgfdw_plus_loopback%' ORDER BY query;
+SELECT * FROM pg_prepared_xacts;
+SELECT count(*) FROM ftv WHERE c1 = 130;
+SELECT array_length(umids, 1) FROM pgfdw_plus.xact_commits ORDER BY fxid;
+
+-- two_phase_commit = on causes read-only foreign transactions to
+-- be committed without using two phase commit protocol.
+BEGIN;
+SELECT count(*) FROM t0;
+SELECT count(*) FROM ft1;
+SELECT count(*) FROM ft2;
+COMMIT;
+SELECT split_part(query, '_', 1) FROM pg_stat_activity
+    WHERE application_name LIKE 'pgfdw_plus_loopback%' ORDER BY query;
+SELECT * FROM pg_prepared_xacts;
+SELECT array_length(umids, 1) FROM pgfdw_plus.xact_commits ORDER BY fxid;
+
+-- two_phase_commit = on causes only write foreign transaction to
+-- be committed via two phase commit protocol.
+BEGIN;
+INSERT INTO t0 VALUES (140);
+INSERT INTO ft1 VALUES (140);
+SELECT count(*) FROM ft2;
+COMMIT;
+SELECT split_part(query, '_', 1) FROM pg_stat_activity
+    WHERE application_name LIKE 'pgfdw_plus_loopback%' ORDER BY query;
+SELECT * FROM pg_prepared_xacts;
+SELECT count(*) FROM ftv WHERE c1 = 140;
+SELECT array_length(umids, 1) FROM pgfdw_plus.xact_commits ORDER BY fxid;
+
+-- two_phase_commit = always causes even read-only foreign transactions
+-- to be committed via two phase commit protocol.
+SET postgres_fdw.two_phase_commit TO 'always';
+BEGIN;
+SELECT count(*) FROM t0;
+SELECT count(*) FROM ft1;
+SELECT count(*) FROM ft2;
+COMMIT;
+SELECT split_part(query, '_', 1) FROM pg_stat_activity
+    WHERE application_name LIKE 'pgfdw_plus_loopback%' ORDER BY query;
+SELECT * FROM pg_prepared_xacts;
+SELECT array_length(umids, 1) FROM pgfdw_plus.xact_commits ORDER BY fxid;
 
 -- ===================================================================
--- test error cases of pg_foreign_prepared_xacts and
+-- Test error cases of pg_foreign_prepared_xacts and
 -- pg_resolve_foreign_prepared_xacts
 -- ===================================================================
--- should fail because specified server doesn't exist
+-- Should fail because specified server doesn't exist.
 SELECT * FROM pg_foreign_prepared_xacts('nonexistent');
 SELECT * FROM pg_resolve_foreign_prepared_xacts('nonexistent');
 
--- should fail because there is no user mapping for specified server and
--- current user
+-- Should fail because there is no user mapping for specified server and
+-- current user.
 SET ROLE regress_pgfdw_local_super2;
 SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
 SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
 SET ROLE regress_pgfdw_local_super1;
 
--- should fail because foreign data wrapper of specified server
--- is not postgres_fdw
+-- Should fail because foreign data wrapper of specified server
+-- is not postgres_fdw.
 SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_dummy_server');
 SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_dummy_server');
 
--- should fail because dblink has not been installed yet
+-- Should fail because dblink has not been installed yet.
 SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
 SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
 
 -- ===================================================================
--- test functions to resolve foreign prepared transactions
+-- Test functions to resolve foreign prepared transactions
 -- ===================================================================
 CREATE EXTENSION dblink;
 
 -- These functions should return 0 rows because there are no foreign
--- prepared transactions
+-- prepared transactions.
 SELECT count(*) FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
 SELECT count(*) FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
 SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
 
 -- xact_commits should be emptied because there are no foreign
--- prepared transactions
+-- prepared transactions.
 SELECT count(*) FROM pgfdw_plus.xact_commits;
 SELECT count(*) FROM pg_vacuum_xact_commits();
 SELECT count(*) FROM pgfdw_plus.xact_commits;
 
--- Set two_phase_commit to 'prepare' to create foreign prepared transactions.
+-- Enable skip_commit_phase to create foreign prepared transactions.
 -- Note that more than two foreign prepared transactions cannot be created
 -- because max_prepared_xacts is set to 2 in regression test.
-SET postgres_fdw.two_phase_commit TO 'prepare';
+SET postgres_fdw.skip_commit_phase TO true;
 BEGIN;
-INSERT INTO ft1 VALUES (101, 101);
-INSERT INTO ft2 VALUES (101, 101);
+INSERT INTO ft1 VALUES (200);
+INSERT INTO ft2 VALUES (200);
 COMMIT;
 SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
 SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
 SELECT count(*) FROM pgfdw_plus.xact_commits;
 
--- Resolve foreign prepared transactions on only one of servers
+-- Resolve foreign prepared transactions on only one of servers.
 SELECT count(*) FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
 SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
 SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
 
 -- xact_commits still should have one row referencing to foreign prepared
--- transactions on another server
+-- transactions on the other server.
 SELECT count(*) FROM pg_vacuum_xact_commits();
 SELECT count(*) FROM pgfdw_plus.xact_commits;
 
 -- All foreign prepared transactions are resolved and xact_commits
--- should be empty
+-- should be empty.
 SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
 SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
 SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
 SELECT count(*) FROM pg_vacuum_xact_commits();
 SELECT count(*) FROM pgfdw_plus.xact_commits;
 
--- should fail because pg_vacuum_xact_commits() cannot be executed
--- in read-only transaction
+-- Should fail because pg_vacuum_xact_commits() cannot be executed
+-- in read-only transaction.
 BEGIN READ ONLY;
 SELECT count(*) FROM pg_vacuum_xact_commits();
 COMMIT;
 
-RESET postgres_fdw.two_phase_commit;
-
 -- ===================================================================
--- test that DEALLOCATE ALL is executed properly even when
+-- Test that DEALLOCATE ALL is executed properly even when
 -- two_phase_commit is on or prepare.
 -- ===================================================================
-SET debug_discard_caches = 0;
-SET postgres_fdw.two_phase_commit TO true;
-
 -- DEALLOCATE ALL should follow COMMIT PREPARED because
 -- a subtransaction is aborted.
+SET postgres_fdw.skip_commit_phase TO false;
 BEGIN;
 SAVEPOINT s;
-INSERT INTO ft1 VALUES (111, 111);
-INSERT INTO ft2 VALUES (111, 111);
+INSERT INTO ft1 VALUES (300);
+INSERT INTO ft2 VALUES (300);
 ROLLBACK TO SAVEPOINT s;
 COMMIT;
 SELECT split_part(query, '_', 1) FROM pg_stat_activity
-    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+    WHERE application_name LIKE 'pgfdw_plus_loopback%' ORDER BY query;
 
 -- DEALLOCATE ALL should follow PREPARE TRANSACTION
--- if a subtransaction is aborted and two_phase_commit is set to 'prepare'.
-SET postgres_fdw.two_phase_commit TO 'prepare';
+-- if a subtransaction is aborted and skip_commit_phase is enabled.
+SET postgres_fdw.skip_commit_phase TO true;
 BEGIN;
 SAVEPOINT s;
-INSERT INTO ft1 VALUES (112, 112);
-INSERT INTO ft2 VALUES (112, 112);
+INSERT INTO ft1 VALUES (310);
+INSERT INTO ft2 VALUES (310);
 ROLLBACK TO SAVEPOINT s;
 COMMIT;
 SELECT split_part(query, '_', 1) FROM pg_stat_activity
-    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+    WHERE application_name LIKE 'pgfdw_plus_loopback%' ORDER BY query;
 SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
 
 -- DEALLOCATE ALL should not run because a subtransaction is not aborted.
 BEGIN;
-INSERT INTO ft1 VALUES (113, 113);
-INSERT INTO ft2 VALUES (113, 113);
+SAVEPOINT s;
+INSERT INTO ft1 VALUES (320);
+INSERT INTO ft2 VALUES (320);
 COMMIT;
 SELECT split_part(query, '_', 1) FROM pg_stat_activity
-    WHERE application_name LIKE 'pgfdw_plus_loopback%';
+    WHERE application_name LIKE 'pgfdw_plus_loopback%' ORDER BY query;
 SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
 
+-- ===================================================================
+-- Reset global settings
+-- ===================================================================
 RESET postgres_fdw.two_phase_commit;
 RESET debug_discard_caches;
 
--- ===================================================================
--- reset global settings
--- ===================================================================
 \unset SHOW_CONTEXT

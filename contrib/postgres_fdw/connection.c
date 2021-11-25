@@ -119,11 +119,10 @@ static void pgfdw_abort_cleanup(ConnCacheEntry *entry, const char *sql,
 								bool toplevel);
 static bool UserMappingPasswordRequired(UserMapping *user);
 static bool disconnect_cached_connections(Oid serverid);
-static void pgfdw_prepare_xacts(void);
+static void pgfdw_prepare_xacts(ConnCacheEntry *entry);
 static void pgfdw_commit_prepared(ConnCacheEntry *entry);
 static bool pgfdw_rollback_prepared(ConnCacheEntry *entry);
 static void pgfdw_deallocate_all(ConnCacheEntry *entry);
-static bool pgfdw_two_phase_commit_is_required(void);
 static void pgfdw_insert_xact_commits(List *umids);
 
 /*
@@ -882,19 +881,12 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 {
 	HASH_SEQ_STATUS scan;
 	ConnCacheEntry *entry;
+	List	   *umids = NIL;
+	bool		used_2pc = false;
 
 	/* Quick exit if no connections were touched in this transaction. */
 	if (!xact_got_connection)
 		return;
-
-	if (pgfdw_two_phase_commit > PGFDW_2PC_OFF &&
-		(event == XACT_EVENT_PARALLEL_PRE_COMMIT ||
-		 event == XACT_EVENT_PRE_COMMIT) &&
-		pgfdw_two_phase_commit_is_required())
-	{
-		pgfdw_prepare_xacts();
-		return;
-	}
 
 	/*
 	 * Scan all connection cache entries to find open remote transactions, and
@@ -925,6 +917,17 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 					 * we can't issue any more commands against it.
 					 */
 					pgfdw_reject_incomplete_xact_state_change(entry);
+
+					if (pgfdw_two_phase_commit == PGFDW_2PC_ALWAYS ||
+						(pgfdw_two_phase_commit == PGFDW_2PC_ON &&
+						 entry->modified))
+					{
+						pgfdw_prepare_xacts(entry);
+						if (pgfdw_track_xact_commits)
+							umids = lappend_oid(umids, (Oid) entry->key);
+						used_2pc = true;
+						continue;
+					}
 
 					/* Commit all remote transactions during pre-commit */
 					entry->changing_xact_state = true;
@@ -1009,6 +1012,13 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 			elog(DEBUG3, "discarding connection %p", entry->conn);
 			disconnect_pg_server(entry);
 		}
+	}
+
+	if (used_2pc)
+	{
+		if (umids != NIL)
+			pgfdw_insert_xact_commits(umids);
+		return;
 	}
 
 	/*
@@ -1726,37 +1736,18 @@ disconnect_cached_connections(Oid serverid)
 			 (*cluster_name == '\0') ? "null" : cluster_name)
 
 static void
-pgfdw_prepare_xacts(void)
+pgfdw_prepare_xacts(ConnCacheEntry *entry)
 {
-	HASH_SEQ_STATUS scan;
-	ConnCacheEntry *entry;
-	List	   *umids = NIL;
+	char		sql[256];
 
-	hash_seq_init(&scan, ConnectionHash);
-	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
-	{
-		char		sql[256];
+	Assert(!FullTransactionIdIsValid(entry->fxid));
+	entry->fxid = GetTopFullTransactionId();
 
-		if (entry->conn == NULL || entry->xact_depth == 0)
-			continue;
+	PreparedXactCommand(sql, "PREPARE TRANSACTION", entry);
 
-		pgfdw_reject_incomplete_xact_state_change(entry);
-
-		Assert(!FullTransactionIdIsValid(entry->fxid));
-		entry->fxid = GetTopFullTransactionId();
-
-		PreparedXactCommand(sql, "PREPARE TRANSACTION", entry);
-
-		entry->changing_xact_state = true;
-		do_sql_command(entry->conn, sql);
-		entry->changing_xact_state = false;
-
-		if (pgfdw_track_xact_commits)
-			umids = lappend_oid(umids, (Oid) entry->key);
-	}
-
-	if (umids != NIL)
-		pgfdw_insert_xact_commits(umids);
+	entry->changing_xact_state = true;
+	do_sql_command(entry->conn, sql);
+	entry->changing_xact_state = false;
 }
 
 static void
@@ -1768,13 +1759,10 @@ pgfdw_commit_prepared(ConnCacheEntry *entry)
 	if (!FullTransactionIdIsValid(entry->fxid))
 		return;
 
-	/*
-	 * If two_phase_commit is off, entry->fxid should be invalid, so we should
-	 * never reach here.
-	 */
-	Assert(pgfdw_two_phase_commit > PGFDW_2PC_OFF);
+	Assert(pgfdw_two_phase_commit == PGFDW_2PC_ALWAYS ||
+		   (pgfdw_two_phase_commit == PGFDW_2PC_ON && entry->modified));
 
-	if (pgfdw_two_phase_commit == PGFDW_2PC_ON)
+	if (!pgfdw_skip_commit_phase)
 	{
 		PreparedXactCommand(sql, "COMMIT PREPARED", entry);
 
@@ -1800,13 +1788,10 @@ pgfdw_rollback_prepared(ConnCacheEntry *entry)
 	if (!FullTransactionIdIsValid(entry->fxid))
 		return false;
 
-	/*
-	 * If two_phase_commit is off, entry->fxid should be invalid, so we should
-	 * never reach here.
-	 */
-	Assert(pgfdw_two_phase_commit > PGFDW_2PC_OFF);
+	Assert(pgfdw_two_phase_commit == PGFDW_2PC_ALWAYS ||
+		   (pgfdw_two_phase_commit == PGFDW_2PC_ON && entry->modified));
 
-	if (pgfdw_two_phase_commit == PGFDW_2PC_ON)
+	if (!pgfdw_skip_commit_phase)
 	{
 		PreparedXactCommand(sql, "ROLLBACK PREPARED", entry);
 		pgfdw_abort_cleanup(entry, sql, true);
@@ -1829,51 +1814,6 @@ pgfdw_deallocate_all(ConnCacheEntry *entry)
 
 	entry->have_prep_stmt = false;
 	entry->have_error = false;
-}
-
-/*
- * Return true if two phase commit protocol is required to commit
- * the local and foreign transactions. We determine that it's required
- * if write transactions were performed on two or more servers.
- *
- * Return false if only read transaction ran or only a single server
- * executed write transaction. In this case two phase commit protocol
- * is not required even when two_phase_commit is enabled.
- */
-static bool
-pgfdw_two_phase_commit_is_required(void)
-{
-	HASH_SEQ_STATUS scan;
-	ConnCacheEntry *entry;
-	int			nwritten = 0;
-
-	Assert(pgfdw_two_phase_commit > PGFDW_2PC_OFF);
-
-	/*
-	 * Determine that the local transaction is a write one if XID has already
-	 * been assigned to it.
-	 */
-	if (TransactionIdIsValid(GetTopTransactionIdIfAny()))
-		nwritten++;
-
-	hash_seq_init(&scan, ConnectionHash);
-	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
-	{
-		if (entry->conn == NULL || entry->xact_depth == 0)
-			continue;
-
-		if (entry->modified)
-			nwritten++;
-
-		if (nwritten >= 2)
-		{
-			hash_seq_term(&scan);
-			return true;
-		}
-	}
-
-	Assert(nwritten < 2);
-	return false;
 }
 
 /* Macros for pgfdw_plus.xact_commits table to track transaction commits */
