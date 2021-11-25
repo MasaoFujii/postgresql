@@ -78,7 +78,8 @@ BEGIN
   -- because it's faster and enables us to determine that in most cases.
   IF r.backend_xid IS NULL AND r.backend_xmin IS NULL AND r.state = 'active' THEN
     PERFORM * FROM pg_locks WHERE locktype = 'transactionid' AND
-      pid = target_pid AND transactionid = target_xid;
+      pid = target_pid AND transactionid = target_xid AND
+      mode = 'ExclusiveLock' AND granted = true;
     IF FOUND THEN RETURN true; END IF;
   END IF;
 
