@@ -49,31 +49,40 @@ $$ LANGUAGE plpgsql;
 -- Is the backend with the given PID still running the local transaction
 -- with the given XID? Note that here the local transaction is considered
 -- as running until it and its foreign transactions all have been completed.
---
--- We can determine that the local transaction is still running if the record
--- with the given PID and XID is found in pg_stat_activity. But
--- pg_stat_activity reports backend_xid is NULL after the local transaction
--- is completed even though its foreign transactions have not been
--- completed yet. To handle this case, we consider that the local transaction
--- is running if its backend_xid and _xmin are NULL, and its state is active.
---
--- But in the latter case, the XID of the local transaction marked as running
--- might not be the same as the given one. That is, this function may return
--- the false result, i.e., may report the transaction with the given XID is
--- running even though it's already completed. This is OK for current use of
--- this function. The caller of this is designed not to perform wrong action
--- even when such false result is returned. And then it can call this function
--- again to get the right result. Also basically such false result is less likely
--- to be returned.
 CREATE OR REPLACE FUNCTION
-  pg_local_and_foreign_xacts_are_running(txid xid, pid integer)
+  pg_local_xact_is_running(target_xid xid, target_pid integer)
   RETURNS boolean AS $$
+DECLARE
+  r record;
 BEGIN
-  PERFORM *
-    FROM pg_stat_get_activity(pid)
-    WHERE backend_xid = txid OR
-      (backend_xid IS NULL AND backend_xmin IS NULL AND state = 'active');
-  IF FOUND THEN RETURN true; ELSE RETURN false; END IF;
+  -- Return false if no record with the given PID is found in pg_stat_activity,
+  -- i.e., the target backend is not running.
+  SELECT * INTO r FROM pg_stat_get_activity(target_pid);
+  IF NOT FOUND THEN RETURN false; END IF;
+
+  -- Return true if the record with the given PID and XID is found
+  -- in pg_stat_activty.
+  IF r.backend_xid = target_xid THEN RETURN true; END IF;
+
+  -- While the backend is processing the second phase of two phase commit
+  -- protocol (i.e., after the local transaction is completed but before
+  -- its state is changed to 'idle'), pg_stat_activity reports its backend_xid
+  -- and backend_xmin are NULL and also state is 'active'. But we cannot
+  -- determine from pg_stat_activity whether it's running the local transaction
+  -- with the given XID or other one. So in this case we check whether
+  -- the record for the lock of transactionid with the given PID and XID is
+  -- found in pg_locks. If found, we can determine that the backend is
+  -- running the local transaction with the given XID.
+  --
+  -- Note that at first we use pg_stat_get_activity() rather than pg_locks
+  -- because it's faster and enables us to determine that in most cases.
+  IF r.backend_xid IS NULL AND r.backend_xmin IS NULL AND r.state = 'active' THEN
+    PERFORM * FROM pg_locks WHERE locktype = 'transactionid' AND
+      pid = target_pid AND transactionid = target_xid;
+    IF FOUND THEN RETURN true; END IF;
+  END IF;
+
+  RETURN false;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -105,11 +114,11 @@ BEGIN
       --
       -- Note that this function can skip committing or rollbacking
       -- the foreign prepared transactions that can be completed.
-      -- Because pg_local_and_foreign_xacts_are_running() can return true
+      -- Because pg_local_xact_is_running() can return true
       -- even when the backend with the given PID is running the transaction
       -- with XID other than the given one. But this is OK because basically
       -- this can rarely happen and we can just retry soon later.
-      CONTINUE WHEN pg_local_and_foreign_xacts_are_running(full_xid::xid, pid);
+      CONTINUE WHEN pg_local_xact_is_running(full_xid::xid, pid);
 
       -- At first use pg_xact_status() to check the commit status of
       -- the transaction with full_xid. Because we can use the function
