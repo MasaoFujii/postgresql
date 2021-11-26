@@ -3,39 +3,51 @@
 -- complain if script is sourced in psql, rather than via ALTER EXTENSION
 \echo Use "ALTER EXTENSION postgres_fdw UPDATE TO '1.2'" to load this file. \quit
 
-CREATE SCHEMA pgfdw_plus;
 
+/*
+ * Information about transactions that used two phase commit protocol
+ * and were successfully committed are collected in this table.
+ */
+CREATE SCHEMA pgfdw_plus;
 CREATE TABLE pgfdw_plus.xact_commits (
   fxid xid8 primary key,
   umids oid[]
 );
 
-CREATE TYPE resolve_foreign_prepared_xacts AS
-  (status text, server name, transaction xid, gid text,
-    prepared timestamp with time zone, owner name, database name);
 
-CREATE OR REPLACE FUNCTION
-  pg_foreign_prepared_xacts (server name)
+/*
+ * Retrieve information about foreign prepared transactions
+ * from given server.
+ */
+CREATE FUNCTION pg_foreign_prepared_xacts (server name)
   RETURNS SETOF pg_prepared_xacts AS $$
 DECLARE
-  sql TEXT;
+  sql text;
 BEGIN
+  /*
+   * Is there user mapping so that current user can connect to given server? */
   PERFORM * FROM pg_user_mappings
     WHERE srvname = server AND (usename = current_user OR usename = 'public');
   IF NOT FOUND THEN
     RAISE EXCEPTION 'user mapping for server "%" and user "%" not found',
       server, current_user;
   END IF;
+
+  /* Is foreign data wrapper of given server "postgres_fdw"? */
   PERFORM * FROM pg_foreign_server fs, pg_foreign_data_wrapper fdw
     WHERE fs.srvfdw = fdw.oid AND fs.srvname = server AND
       fdw.fdwname = 'postgres_fdw';
   IF NOT FOUND THEN
     RAISE EXCEPTION 'foreign data wrapper of specified server must be "postgres_fdw"';
   END IF;
+
+  /* Has dblink already been installed? */
   PERFORM * FROM pg_extension WHERE extname = 'dblink';
   IF NOT FOUND THEN
     RAISE EXCEPTION 'extension "dblink" must be installed';
   END IF;
+
+  /* Collect only foreign prepared transactions that current user can handle */
   sql := 'SELECT * FROM pg_prepared_xacts ' ||
     'WHERE owner = current_user AND database = current_database() ' ||
     'AND gid LIKE ''pgfdw_%_%_%_' || current_setting('cluster_name') || '''';
@@ -46,36 +58,50 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Is the backend with the given PID still running the local transaction
--- with the given XID? Note that here the local transaction is considered
--- as running until it and its foreign transactions all have been completed.
-CREATE OR REPLACE FUNCTION
-  pg_local_xact_is_running(target_xid xid, target_pid integer)
+
+/*
+ * Return true if backend with given PID may be still running
+ * transaction with given XID, false otherwise.
+ *
+ * Note that here transaction is considered as running
+ * until it and its all foreign transactions have been completed.
+ */
+CREATE FUNCTION pg_xact_is_running(target_xid xid, target_pid integer)
   RETURNS boolean AS $$
 DECLARE
   r record;
 BEGIN
-  -- Return false if no record with the given PID is found in pg_stat_activity,
-  -- i.e., the target backend is not running.
+  /* Quick exit if target backend is not running */
   SELECT * INTO r FROM pg_stat_get_activity(target_pid);
   IF NOT FOUND THEN RETURN false; END IF;
 
-  -- Return true if the record with the given PID and XID is found
-  -- in pg_stat_activty.
+  /*
+   * Return true if pg_stat_get_activity() reports target backend is
+   * running target transaction.
+   *
+   * There is corner case where backend_xid and target XID are the same
+   * but their epoch is different. In this case target transaction is not
+   * running but true is returned incorrectly. For now we don't fix
+   * this corner case because it's very unlikely to happen and there is
+   * no good idea for the fix yet.
+   */
   IF r.backend_xid = target_xid THEN RETURN true; END IF;
 
-  -- While the backend is processing the second phase of two phase commit
-  -- protocol (i.e., after the local transaction is completed but before
-  -- its state is changed to 'idle'), pg_stat_activity reports its backend_xid
-  -- and backend_xmin are NULL and also state is 'active'. But we cannot
-  -- determine from pg_stat_activity whether it's running the local transaction
-  -- with the given XID or other one. So in this case we check whether
-  -- the record for the lock of transactionid with the given PID and XID is
-  -- found in pg_locks. If found, we can determine that the backend is
-  -- running the local transaction with the given XID.
-  --
-  -- Note that at first we use pg_stat_get_activity() rather than pg_locks
-  -- because it's faster and enables us to determine that in most cases.
+  /*
+   * Even while pg_stat_get_activity() is reporting backend_xid is NULL,
+   * if backend_xmin is NULL and also state is 'active', backend may be
+   * still running and in commit phase of two phase commit protocol.
+   * But since backend_xid is NULL, pg_stat_activity cannot tell whether
+   * target transaction is running or other one is.
+   *
+   * In this case pg_locks is used next. While in commit phase,
+   * pg_locks should have record for lock on transactionid with given PID
+   * and XID. If it's found, transaction can be considered as running.
+   *
+   * Note that at first pg_stat_get_activity() is checked and then
+   * pg_locks is. Because pg_stat_get_activity() is faster and enough for
+   * many cases.
+   */
   IF r.backend_xid IS NULL AND r.backend_xmin IS NULL AND r.state = 'active' THEN
     PERFORM * FROM pg_locks WHERE locktype = 'transactionid' AND
       pid = target_pid AND transactionid = target_xid AND
@@ -87,12 +113,25 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION
+
+/*
+ * Data type for record that pg_resolve_foreign_prepared_xacts()
+ * and _all() return.
+ */
+CREATE TYPE type_resolve_foreign_prepared_xacts AS
+  (status text, server name, transaction xid, gid text,
+    prepared timestamp with time zone, owner name, database name);
+
+
+/*
+ * Resolve foreign prepared transactions on given server.
+ */
+CREATE FUNCTION
   pg_resolve_foreign_prepared_xacts (server name, force boolean DEFAULT false)
-  RETURNS SETOF resolve_foreign_prepared_xacts AS $$
+  RETURNS SETOF type_resolve_foreign_prepared_xacts AS $$
 DECLARE
-  r resolve_foreign_prepared_xacts;
-  sql TEXT;
+  r type_resolve_foreign_prepared_xacts;
+  sql text;
   full_xid xid8;
   pid integer;
   connected boolean := false;
@@ -100,51 +139,43 @@ BEGIN
   FOR r IN SELECT NULL AS status, server, *
     FROM pg_foreign_prepared_xacts(server) LOOP
     sql := NULL;
+
     BEGIN
       full_xid := split_part(r.gid, '_', 2)::xid8;
       pid := split_part(r.gid, '_', 4)::integer;
 
-      -- While the backend is committing or rollbacking the prepared
-      -- transaction on the remote server, pg_stat_activity is reporting
-      -- the backend's state as "active" and its XID and XMIN as NULL.
-      -- In this case this function should not commit nor rollback
-      -- that foreign prepared transaction. Otherwise both the backend
-      -- and this function can try to end the foreign prepared transaction
-      -- at the same time, and which would cause either of them to
-      -- fail with an error.
-      --
-      -- Note that this function can skip committing or rollbacking
-      -- the foreign prepared transactions that can be completed.
-      -- Because pg_local_xact_is_running() can return true
-      -- even when the backend with the given PID is running the transaction
-      -- with XID other than the given one. But this is OK because basically
-      -- this can rarely happen and we can just retry soon later.
-      CONTINUE WHEN pg_local_xact_is_running(full_xid::xid, pid);
+      /*
+       * Skip resolving foreign prepared transactions if backend that
+       * started them may be still committing or rollbacking them.
+       * Otherwise backend and this function may try to resolve foreign
+       * prepared transactions at the same time, and which would cause
+       * either of them to fail with an error.
+       */
+      CONTINUE WHEN pg_xact_is_running(full_xid::xid, pid);
 
-      -- At first use pg_xact_status() to check the commit status of
-      -- the transaction with full_xid. Because we can use the function
-      -- for that purpose even when postgres_fdw.track_xact_commits is
-      -- disabled, and using it is faster than looking up
-      -- pgfdw_plus.xact_commits table.
+      /*
+       * At first use pg_xact_status() to check commit status of transaction
+       * with full_xid. Because pg_xact_status() can be used for that purpose
+       * even when track_xact_commits is off, and using it is faster than
+       * lookup on xact_commits table.
+       */
       r.status := pg_xact_status(full_xid);
       CASE r.status
-        WHEN 'committed' THEN
-          sql := 'COMMIT PREPARED ''' || r.gid || '''';
-        WHEN 'aborted' THEN
-          sql := 'ROLLBACK PREPARED ''' || r.gid || '''';
+        WHEN 'committed' THEN sql := 'COMMIT PREPARED ''' || r.gid || '''';
+        WHEN 'aborted' THEN sql := 'ROLLBACK PREPARED ''' || r.gid || '''';
       END CASE;
     EXCEPTION WHEN OTHERS THEN
     END;
 
-    -- If pg_xact_status(full_xid) cannot report the commit status,
-    -- look up pgfdw_plus.xact_commits. We can determine that
-    -- the transaction was committed if the entry for full_xid is found in it.
-    -- Otherwise we can determine that the transaction was aborted
-    -- unless postgres_fdw.track_xact_commits had been disabled so far.
-    -- For the case where that's disabled, by default we don't rollback
-    -- the foreign prepared transaction if no entry for full_xid is found
-    -- in xact_commits. If the second argument "force" is true,
-    -- that transaction is forcibly rollbacked.
+    /*
+     * Look up xact_commits table if pg_xact_status() fails to report commit
+     * status. If entry for full_xid is found in it, transaction with full_xid
+     * should be considered as committed. Otherwise as rollbacked
+     * unless track_xact_commits had been disabled so far. Note that
+     * foreign prepared transaction is kept as it is by default if its entry
+     * is not found, in case of track_xact_commits=off. To forcibly
+     * rollback it, argument 'force' needs to be enabled.
+     */
     IF sql IS NULL THEN
       PERFORM * FROM pgfdw_plus.xact_commits WHERE fxid = full_xid LIMIT 1;
       IF FOUND THEN
@@ -163,12 +194,13 @@ BEGIN
     IF sql IS NOT NULL THEN
       RETURN NEXT r;
 
-      -- Use dblink_connect() and dblink_exec() here instead of dblink()
-      -- so that we can establish new connection to the foreign server
-      -- only once and reuse that connection to execute the transaction
-      -- command. This would decrease the number of connection establishments
-      -- and improve the performance of this function especially
-      -- when there are lots of foreign prepared transactions to resolve.
+    /*
+     * Use dblink_connect() and dblink_exec() here instead of dblink()
+     * so that new connection is made only once and is reused to execute
+     * transaction command. This would decrease the number of connection
+     * establishments and improve performance of this function especially
+     * when there are lots of foreign prepared transactions to resolve.
+     */
       IF NOT connected THEN
         PERFORM dblink_connect('pgfdw_plus_conn', server);
 	connected := true;
@@ -184,16 +216,22 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Set current user to given user. Return true if successful, false otherwise.
+/*
+ * Set current user to given user.
+ *
+ * Return true if successful, false otherwise.
+ */
 CREATE FUNCTION pg_set_current_user(usename name) RETURNS boolean AS $$
 DECLARE
-  errmsg TEXT;
+  errmsg text;
 BEGIN
-  -- Quick exit if given user is 'public' or it's the same as current user.
+  /* Quick exit if given user is 'public' or it's the same as current user */
   IF usename = 'public' OR usename = current_user THEN RETURN true; END IF;
 
-  -- If current user is not superuser nor it's not a member of given user,
-  -- it's not allowed to be set to given user. Return false in this case.
+  /*
+   * If current user is not superuser nor it's not a member of given user,
+   * it's not allowed to be set to given user. Return false in this case.
+   */
   PERFORM * FROM pg_roles WHERE rolname = current_user AND rolsuper;
   IF NOT FOUND THEN
     PERFORM * FROM pg_auth_members
@@ -201,8 +239,10 @@ BEGIN
     IF NOT FOUND THEN RETURN false; END IF;
   END IF;
 
-  -- Report NOTICE message and return false if SET ROLE fails even when
-  -- current user is allowed to be set to given user.
+  /*
+   * Report NOTICE message and return false if SET ROLE fails even when
+   * current user is allowed to be set to given user.
+   */
   BEGIN
     EXECUTE 'SET ROLE ' || usename;
   EXCEPTION WHEN OTHERS THEN
@@ -217,13 +257,16 @@ END;
 $$ LANGUAGE plpgsql;
 
 
-CREATE OR REPLACE FUNCTION
-  pg_resolve_foreign_prepared_xacts_all(force boolean DEFAULT false)
-  RETURNS SETOF resolve_foreign_prepared_xacts AS $$
+/*
+ * Resolve foreign prepared transactions on all servers.
+ */
+CREATE FUNCTION
+  pg_resolve_foreign_prepared_xacts_all (force boolean DEFAULT false)
+  RETURNS SETOF type_resolve_foreign_prepared_xacts AS $$
 DECLARE
   r RECORD;
   orig_user name := current_user;
-  errmsg TEXT;
+  errmsg text;
 BEGIN
   FOR r IN
     SELECT * FROM pg_foreign_data_wrapper fdw,
@@ -232,15 +275,18 @@ BEGIN
       fs.srvfdw = fdw.oid AND fs.oid = um.srvid
     ORDER BY fs.srvname
   LOOP
-    -- Change current user in order to connect to foreign server based on
-    -- user mapping. If fail, resolutions of foreign prepared transactions on
-    -- this server are skipped.
+    /*
+     * Change current user in order to connect to foreign server based on
+     * user mapping. If fail, resolutions of foreign prepared transactions on
+     * this server are skipped.
+     */
     IF NOT pg_set_current_user(r.usename) THEN
       RAISE NOTICE 'skipping server "%" with user mapping for "%"',
         r.srvname, r.usename;
       CONTINUE;
     END IF;
 
+    /* Resolve foreign prepared transactions on one server */
     BEGIN
       RETURN QUERY SELECT *
         FROM pg_resolve_foreign_prepared_xacts(r.srvname, force);
@@ -250,29 +296,34 @@ BEGIN
         r.srvname USING DETAIL = 'Error message: ' || errmsg;
     END;
 
-    -- Back to orignal user. RESET ROLE should not be used for the case
-    -- where session user and current user are different.
+    /*
+     * Back to orignal user. RESET ROLE should not be used for the case
+     * where session user and current user are different.
+     */
     EXECUTE 'SET ROLE ' || orig_user;
   END LOOP;
 
-  -- Current user must be the same before and after executing this function.
+  /* Current user must be the same before and after executing this function */
   ASSERT orig_user = current_user;
 END;
 $$ LANGUAGE plpgsql;
 
--- Get the minimum value of full transaction IDs assigned to running
--- local transactions and foreign prepared (unresolved yet) ones.
--- This function also returns a list of user mapping OIDs
--- corresponding to the server that it successfully fetched the minimum
--- full transaction ID from.
-CREATE OR REPLACE FUNCTION
+
+/*
+ * Get minimum value of full transaction IDs assigned to running
+ * local transactions and foreign prepared (unresolved yet) ones.
+ *
+ * This function also returns a list of user mapping OIDs corresponding to
+ * server that it successfully fetched minimum full transaction ID from.
+ */
+CREATE FUNCTION
   pg_min_fxid_foreign_prepared_xacts_all(OUT fxmin xid8, OUT umids oid[])
   RETURNS record AS $$
 DECLARE
   r RECORD;
   fxid xid8;
   orig_user name := current_user;
-  errmsg TEXT;
+  errmsg text;
 BEGIN
   fxmin := pg_snapshot_xmin(pg_current_snapshot());
   FOR r IN
@@ -282,9 +333,11 @@ BEGIN
       fs.srvfdw = fdw.oid AND fs.oid = um.srvid
     ORDER BY fs.srvname
   LOOP
-    -- Change current user in order to connect to foreign server based on
-    -- user mapping. If fail, we skip getting min fxid of foreign prepared
-    -- transactions on this server.
+    /*
+     * Change current user in order to connect to foreign server based on
+     * user mapping. If fail, we skip getting min fxid of foreign prepared
+     * transactions on this server.
+     */
     IF NOT pg_set_current_user(r.usename) THEN
       RAISE NOTICE 'skipping server "%" with user mapping for "%"',
         r.srvname, r.usename;
@@ -292,10 +345,11 @@ BEGIN
     END IF;
 
     BEGIN
-      -- Use min(bigint)::text::xid8 to calculate the minimum value of
-      -- full transaction IDs, for now, instead of min(xid8) because
-      -- PostgreSQL core hasn't supported yet min(xid8) aggregation
-      -- function.
+      /*
+       * Use min(bigint)::text::xid8 to calculate minimum value of
+       * full transaction IDs, for now, instead of min(xid8) because
+       * PostgreSQL core hasn't supported yet min(xid8) aggregation function.
+       */
       SELECT min(split_part(gid, '_', 2)::bigint)::text::xid8 INTO fxid
         FROM pg_foreign_prepared_xacts(r.srvname);
       IF fxid IS NOT NULL AND fxid < fxmin THEN
@@ -308,21 +362,24 @@ BEGIN
         r.srvname USING DETAIL = 'Error message: ' || errmsg;
     END;
 
-    -- Back to orignal user. RESET ROLE should not be used for the case
-    -- where session user and current user are different.
+    /*
+     * Back to orignal user. RESET ROLE should not be used for the case
+     * where session user and current user are different.
+     */
     EXECUTE 'SET ROLE ' || orig_user;
   END LOOP;
 
-  -- Current user must be the same before and after executing this function.
+  /* Current user must be the same before and after executing this function */
   ASSERT orig_user = current_user;
 END;
 $$ LANGUAGE plpgsql;
 
--- Delete the records no longer necessary to resolve foreign prepared
--- transactions, from pgfdw_plus.xact_commits. This function returns
--- the deleted records.
-CREATE OR REPLACE FUNCTION
-  pg_vacuum_xact_commits()
+/*
+ * Delete records no longer necessary to resolve foreign prepared
+ * transactions, from xact_commits. This function returns
+ * deleted records.
+ */
+CREATE FUNCTION pg_vacuum_xact_commits()
   RETURNS SETOF pgfdw_plus.xact_commits AS $$
 DECLARE
   r record;
