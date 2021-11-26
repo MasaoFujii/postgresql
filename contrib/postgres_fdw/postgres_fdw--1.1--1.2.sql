@@ -183,42 +183,48 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Set the current user to the proper user, to connect to the foreign
--- server based on the user mapping.
-CREATE OR REPLACE FUNCTION
-  pg_set_role_with_user_mapping(orig name, usename name)
-  RETURNS void AS $$
+
+-- Set current user to given user. Return true if successful, false otherwise.
+CREATE FUNCTION pg_set_current_user(usename name) RETURNS boolean AS $$
 DECLARE
-  dest name := NULL;
   errmsg TEXT;
 BEGIN
-  IF usename = 'public' THEN
-    dest := orig;
-  ELSIF usename <> current_user THEN
-    dest := usename;
-  ELSE
-    RETURN;
+  -- Quick exit if given user is 'public' or it's the same as current user.
+  IF usename = 'public' OR usename = current_user THEN RETURN true; END IF;
+
+  -- If current user is not superuser nor it's not a member of given user,
+  -- it's not allowed to be set to given user. Return false in this case.
+  PERFORM * FROM pg_roles WHERE rolname = current_user AND rolsuper;
+  IF NOT FOUND THEN
+    PERFORM * FROM pg_auth_members
+      WHERE roleid = usename::regrole AND member = current_user::regrole;
+    IF NOT FOUND THEN RETURN false; END IF;
   END IF;
 
+  -- Report NOTICE message and return false if SET ROLE fails even when
+  -- current user is allowed to be set to given user.
   BEGIN
-    EXECUTE 'SET ROLE ' || dest;
+    EXECUTE 'SET ROLE ' || usename;
   EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS errmsg = MESSAGE_TEXT;
     RAISE NOTICE 'could not set current user to user "%"',
-      dest USING DETAIL = 'Error message: ' || errmsg;
+      usename USING DETAIL = 'Error message: ' || errmsg;
+    RETURN false;
   END;
+
+  RETURN true;
 END;
 $$ LANGUAGE plpgsql;
+
 
 CREATE OR REPLACE FUNCTION
   pg_resolve_foreign_prepared_xacts_all(force boolean DEFAULT false)
   RETURNS SETOF resolve_foreign_prepared_xacts AS $$
 DECLARE
   r RECORD;
-  orig_user name;
+  orig_user name := current_user;
   errmsg TEXT;
 BEGIN
-  orig_user = current_user;
   FOR r IN
     SELECT * FROM pg_foreign_data_wrapper fdw,
       pg_foreign_server fs, pg_user_mappings um
@@ -226,7 +232,14 @@ BEGIN
       fs.srvfdw = fdw.oid AND fs.oid = um.srvid
     ORDER BY fs.srvname
   LOOP
-    PERFORM pg_set_role_with_user_mapping(orig_user, r.usename);
+    -- Change current user in order to connect to foreign server based on
+    -- user mapping. If fail, resolutions of foreign prepared transactions on
+    -- this server are skipped.
+    IF NOT pg_set_current_user(r.usename) THEN
+      RAISE NOTICE 'skipping server "%" with user mapping for "%"',
+        r.srvname, r.usename;
+      CONTINUE;
+    END IF;
 
     BEGIN
       RETURN QUERY SELECT *
@@ -236,8 +249,14 @@ BEGIN
       RAISE NOTICE 'could not resolve foreign prepared transactions on server "%"',
         r.srvname USING DETAIL = 'Error message: ' || errmsg;
     END;
+
+    -- Back to orignal user. RESET ROLE should not be used for the case
+    -- where session user and current user are different.
+    EXECUTE 'SET ROLE ' || orig_user;
   END LOOP;
-  EXECUTE 'SET ROLE ' || orig_user;
+
+  -- Current user must be the same before and after executing this function.
+  ASSERT orig_user = current_user;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -252,10 +271,9 @@ CREATE OR REPLACE FUNCTION
 DECLARE
   r RECORD;
   fxid xid8;
-  orig_user name;
+  orig_user name := current_user;
   errmsg TEXT;
 BEGIN
-  orig_user = current_user;
   fxmin := pg_snapshot_xmin(pg_current_snapshot());
   FOR r IN
     SELECT * FROM pg_foreign_data_wrapper fdw,
@@ -264,7 +282,13 @@ BEGIN
       fs.srvfdw = fdw.oid AND fs.oid = um.srvid
     ORDER BY fs.srvname
   LOOP
-    PERFORM pg_set_role_with_user_mapping(orig_user, r.usename);
+    -- Change current user in order to connect to foreign server based on
+    -- user mapping. If fail, we skip getting min fxid of foreign prepared
+    -- transactions on this server.
+    IF NOT pg_set_current_user(r.usename) THEN
+      RAISE NOTICE 'skipping server "%" with user mapping for "%"',
+        r.srvname, r.usename;
+    END IF;
 
     BEGIN
       -- Use min(bigint)::text::xid8 to calculate the minimum value of
@@ -282,8 +306,14 @@ BEGIN
       RAISE NOTICE 'could not retrieve minimum full transaction ID from server "%"',
         r.srvname USING DETAIL = 'Error message: ' || errmsg;
     END;
+
+    -- Back to orignal user. RESET ROLE should not be used for the case
+    -- where session user and current user are different.
+    EXECUTE 'SET ROLE ' || orig_user;
   END LOOP;
-  EXECUTE 'SET ROLE ' || orig_user;
+
+  -- Current user must be the same before and after executing this function.
+  ASSERT orig_user = current_user;
 END;
 $$ LANGUAGE plpgsql;
 
