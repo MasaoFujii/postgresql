@@ -301,6 +301,28 @@ SELECT split_part(query, '_', 1) FROM pg_stat_activity
 SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
 
 -- ===================================================================
+-- Test functions executed by non-superusers
+-- ===================================================================
+CREATE ROLE regress_pgfdw_local_normal1 NOSUPERUSER;
+CREATE ROLE regress_pgfdw_remote_normal1 NOSUPERUSER LOGIN;
+
+CREATE USER MAPPING FOR regress_pgfdw_local_normal1 SERVER pgfdw_plus_loopback1
+  OPTIONS (user 'regress_pgfdw_remote_normal1');
+
+GRANT ALL ON SCHEMA pgfdw_plus TO regress_pgfdw_local_normal1;
+GRANT ALL ON TABLE pgfdw_plus.xact_commits TO regress_pgfdw_local_normal1;
+GRANT ALL ON SCHEMA regress_pgfdw_plus TO regress_pgfdw_local_normal1;
+GRANT ALL ON FOREIGN SERVER pgfdw_plus_loopback1 TO regress_pgfdw_local_normal1;
+
+SET ROLE regress_pgfdw_local_normal1;
+SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pg_vacuum_xact_commits();
+
+SET ROLE regress_pgfdw_local_super1;
+SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pg_vacuum_xact_commits();
+
+-- ===================================================================
 -- Reset global settings
 -- ===================================================================
 RESET postgres_fdw.two_phase_commit;

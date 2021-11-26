@@ -288,6 +288,7 @@ BEGIN
     IF NOT pg_set_current_user(r.usename) THEN
       RAISE NOTICE 'skipping server "%" with user mapping for "%"',
         r.srvname, r.usename;
+      CONTINUE;
     END IF;
 
     BEGIN

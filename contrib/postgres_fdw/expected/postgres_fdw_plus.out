@@ -580,6 +580,61 @@ SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
 (1 row)
 
 -- ===================================================================
+-- Test functions executed by non-superusers
+-- ===================================================================
+CREATE ROLE regress_pgfdw_local_normal1 NOSUPERUSER;
+CREATE ROLE regress_pgfdw_remote_normal1 NOSUPERUSER LOGIN;
+CREATE USER MAPPING FOR regress_pgfdw_local_normal1 SERVER pgfdw_plus_loopback1
+  OPTIONS (user 'regress_pgfdw_remote_normal1');
+GRANT ALL ON SCHEMA pgfdw_plus TO regress_pgfdw_local_normal1;
+GRANT ALL ON TABLE pgfdw_plus.xact_commits TO regress_pgfdw_local_normal1;
+GRANT ALL ON SCHEMA regress_pgfdw_plus TO regress_pgfdw_local_normal1;
+GRANT ALL ON FOREIGN SERVER pgfdw_plus_loopback1 TO regress_pgfdw_local_normal1;
+SET ROLE regress_pgfdw_local_normal1;
+SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+NOTICE:  skipping server "loopback" with user mapping for "postgres"
+NOTICE:  skipping server "loopback2" with user mapping for "postgres"
+NOTICE:  could not resolve foreign prepared transactions on server "pgfdw_plus_loopback1"
+DETAIL:  Error message: password is required
+NOTICE:  could not resolve foreign prepared transactions on server "pgfdw_plus_loopback1"
+DETAIL:  Error message: password is required
+NOTICE:  skipping server "pgfdw_plus_loopback2" with user mapping for "regress_pgfdw_local_super1"
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM pg_vacuum_xact_commits();
+NOTICE:  skipping server "loopback" with user mapping for "postgres"
+NOTICE:  skipping server "loopback2" with user mapping for "postgres"
+NOTICE:  could not retrieve minimum full transaction ID from server "pgfdw_plus_loopback1"
+DETAIL:  Error message: password is required
+NOTICE:  could not retrieve minimum full transaction ID from server "pgfdw_plus_loopback1"
+DETAIL:  Error message: password is required
+NOTICE:  skipping server "pgfdw_plus_loopback2" with user mapping for "regress_pgfdw_local_super1"
+ count 
+-------
+     0
+(1 row)
+
+SET ROLE regress_pgfdw_local_super1;
+SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+NOTICE:  could not resolve foreign prepared transactions on server "pgfdw_plus_loopback1"
+DETAIL:  Error message: password is required
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM pg_vacuum_xact_commits();
+NOTICE:  could not retrieve minimum full transaction ID from server "pgfdw_plus_loopback1"
+DETAIL:  Error message: password is required
+ count 
+-------
+     3
+(1 row)
+
+-- ===================================================================
 -- Reset global settings
 -- ===================================================================
 RESET postgres_fdw.two_phase_commit;
