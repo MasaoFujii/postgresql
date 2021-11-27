@@ -238,7 +238,9 @@ SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
 SELECT count(*) FROM pgfdw_plus.xact_commits;
 
 -- Resolve foreign prepared transactions on only one of servers.
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT status, count(*)
+  FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1')
+  GROUP BY status ORDER BY status;
 SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
 SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
 
@@ -247,9 +249,26 @@ SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
 SELECT count(*) FROM pg_vacuum_xact_commits();
 SELECT count(*) FROM pgfdw_plus.xact_commits;
 
+-- Create one foreign prepared transaction that should be rollbacked
+-- so as to test later whether pg_resolve_foreign_prepared_xacts_all()
+-- can actually rollback it.
+BEGIN;
+INSERT INTO ft1 VALUES (210);
+INSERT INTO ft2 VALUES (210);
+SELECT pg_terminate_backend(pid, 10000) FROM pg_stat_activity
+    WHERE application_name = 'pgfdw_plus_loopback1';
+COMMIT;
+BEGIN;
+INSERT INTO ft1 VALUES (220);
+INSERT INTO ft2 VALUES (220);
+SELECT pg_terminate_backend(pid, 10000) FROM pg_stat_activity
+    WHERE application_name = 'pgfdw_plus_loopback2';
+COMMIT;
+
 -- All foreign prepared transactions are resolved and xact_commits
 -- should be empty.
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+SELECT status, count(*) FROM pg_resolve_foreign_prepared_xacts_all()
+  GROUP BY status ORDER BY status;
 SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
 SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
 SELECT count(*) FROM pg_vacuum_xact_commits();
