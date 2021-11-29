@@ -229,15 +229,10 @@ BEGIN
   IF usename = 'public' OR usename = current_user THEN RETURN true; END IF;
 
   /*
-   * If current user is not superuser nor it's not a member of given user,
-   * it's not allowed to be set to given user. Return false in this case.
+   * Return false if current user has neither direct nor indirect membership
+   * in given user (that is, doesn't have the right to do SET ROLE).
    */
-  PERFORM * FROM pg_roles WHERE rolname = current_user AND rolsuper;
-  IF NOT FOUND THEN
-    PERFORM * FROM pg_auth_members
-      WHERE roleid = usename::regrole AND member = current_user::regrole;
-    IF NOT FOUND THEN RETURN false; END IF;
-  END IF;
+  IF NOT pg_has_role(usename, 'MEMBER') THEN RETURN false; END IF;
 
   /*
    * Report NOTICE message and return false if SET ROLE fails even when
