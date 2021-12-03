@@ -350,27 +350,29 @@ GRANT ALL ON TABLE pgfdw_plus.xact_commits TO regress_pgfdw_local_normal1;
 GRANT ALL ON SCHEMA pgfdw_plus TO regress_pgfdw_local_normal4;
 GRANT ALL ON TABLE pgfdw_plus.xact_commits TO regress_pgfdw_local_normal4;
 
--- Server with user mapping for superuser should be skipped, but that
--- for public or regress_pgfdw_local_normal1 not.
+-- Server with user mapping for superuser or public should be skipped,
+-- but that for regress_pgfdw_local_normal1 not.
 SET ROLE regress_pgfdw_local_normal1;
 SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
 SELECT count(*) FROM pg_vacuum_xact_commits();
 
 -- Server with user mapping for superuser should be skipped, but that
--- for public or regress_pgfdw_local_normal1 not because
--- regress_pgfdw_local_normal3 has indirect membership in _normal1.
+-- for public or regress_pgfdw_local_normal1 not. Because
+-- regress_pgfdw_local_normal3 can use public mapping and has indirect
+-- membership in regress_pgfdw_local_normal1.
 SET ROLE regress_pgfdw_local_normal3;
 SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
 SELECT count(*) FROM pg_vacuum_xact_commits();
 
--- Also server with user mapping for regress_pgfdw_local_normal1
--- should be skipped because regress_pgfdw_local_normal4 has
--- no membership in _normal1.
+-- Server with user mapping for superuser or regress_pgfdw_local_normal1
+-- should be skipped, but that for public not. Because regress_pgfdw_local_normal4
+-- can use public mapping but has no membership in regress_pgfdw_local_normal1.
 SET ROLE regress_pgfdw_local_normal4;
 SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
 SELECT count(*) FROM pg_vacuum_xact_commits();
 
--- No server should be skipped because current user is superuser.
+-- No server should be skipped because current user is superuser and
+-- also can be set to user who can use public mapping.
 SET ROLE regress_pgfdw_local_super1;
 SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
 SELECT count(*) FROM pg_vacuum_xact_commits();

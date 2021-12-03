@@ -219,14 +219,18 @@ $$ LANGUAGE plpgsql;
 /*
  * Set current user to given user.
  *
- * Return true if successful, false otherwise.
+ * Return true if successful, false otherwise. Note that false is returned
+ * if given user is NULL or 'public'.
  */
 CREATE FUNCTION pg_set_current_user(usename name) RETURNS boolean AS $$
 DECLARE
   errmsg text;
 BEGIN
-  /* Quick exit if given user is 'public' or it's the same as current user */
-  IF usename = 'public' OR usename = current_user THEN RETURN true; END IF;
+  /* Quick exit and return false if given user is NULL or 'public' */
+  IF usename IS NULL OR usename = 'public' THEN RETURN false; END IF;
+
+  /* Quick exit and return true if given user is the same as current user */
+  IF usename = current_user THEN RETURN true; END IF;
 
   /*
    * Return false if current user has neither direct nor indirect membership
@@ -253,6 +257,36 @@ $$ LANGUAGE plpgsql;
 
 
 /*
+ * Find out user that can use public mapping to given server.
+ *
+ * Return name of such user if found, NULL otherwise.
+ */
+CREATE FUNCTION pg_user_for_public_mapping(server name)
+  RETURNS name AS $$
+DECLARE
+  target_user name := NULL;
+BEGIN
+  /*
+   * Find user 1) who has right to use given server,
+   * 2) whom current user has membership in, and
+   * 3) who has no user mapping for itself to given server.
+   *
+   * Use pg_roles intead of pg_user because even role without login
+   * privilege can use user mappings and dblink to foreign servers.
+   */
+  SELECT r.rolname INTO target_user FROM pg_roles r WHERE
+    has_server_privilege(r.rolname, server, 'USAGE') AND
+    pg_has_role(r.rolname, 'MEMBER') AND
+    r.rolname NOT IN
+      (SELECT um.usename FROM pg_user_mappings um
+        WHERE um.usename <> 'public' AND um.srvname = server) AND
+    r.rolname NOT LIKE 'pg\_%'
+    ORDER BY r.rolname LIMIT 1;
+  RETURN target_user;
+END;
+$$ LANGUAGE plpgsql;
+
+/*
  * Resolve foreign prepared transactions on all servers.
  */
 CREATE FUNCTION
@@ -261,6 +295,7 @@ CREATE FUNCTION
 DECLARE
   r RECORD;
   orig_user name := current_user;
+  target_user name;
   errmsg text;
 BEGIN
   FOR r IN
@@ -271,11 +306,22 @@ BEGIN
     ORDER BY fs.srvname
   LOOP
     /*
+     * If target user is 'public', find out user who can use this public
+     * mapping and reset target user to it. If no such user is found,
+     * target user is reset to NULL and subsequent pg_set_current_user()
+     * returns false.
+     */
+    target_user := r.usename;
+    IF target_user = 'public' THEN
+      target_user := pg_user_for_public_mapping(r.srvname);
+    END IF;
+
+    /*
      * Change current user in order to connect to foreign server based on
      * user mapping. If fail, resolutions of foreign prepared transactions on
      * this server are skipped.
      */
-    IF NOT pg_set_current_user(r.usename) THEN
+    IF NOT pg_set_current_user(target_user) THEN
       RAISE NOTICE 'skipping server "%" with user mapping for "%"',
         r.srvname, r.usename;
       CONTINUE;
@@ -318,6 +364,7 @@ DECLARE
   r RECORD;
   fxid xid8;
   orig_user name := current_user;
+  target_user name;
   errmsg text;
 BEGIN
   fxmin := pg_snapshot_xmin(pg_current_snapshot());
@@ -329,11 +376,22 @@ BEGIN
     ORDER BY fs.srvname
   LOOP
     /*
+     * If target user is 'public', find out user who can use this public
+     * mapping and reset target user to it. If no such user is found,
+     * target user is reset to NULL and subsequent pg_set_current_user()
+     * returns false.
+     */
+    target_user := r.usename;
+    IF target_user = 'public' THEN
+      target_user := pg_user_for_public_mapping(r.srvname);
+    END IF;
+
+    /*
      * Change current user in order to connect to foreign server based on
      * user mapping. If fail, we skip getting min fxid of foreign prepared
      * transactions on this server.
      */
-    IF NOT pg_set_current_user(r.usename) THEN
+    IF NOT pg_set_current_user(target_user) THEN
       RAISE NOTICE 'skipping server "%" with user mapping for "%"',
         r.srvname, r.usename;
       CONTINUE;
