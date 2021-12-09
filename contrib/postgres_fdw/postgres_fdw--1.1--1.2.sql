@@ -273,6 +273,12 @@ BEGIN
    *
    * Use pg_roles intead of pg_user because even role without login
    * privilege can use user mappings and dblink to foreign servers.
+   *
+   * Note that superuser is chosen preferentially if both superuser
+   * and non-superuser are picked up as user who can use public mapping.
+   * Because this case happens only when superuser calls this function
+   * and which means that it basically wants to use superuser for
+   * processing as much as possible.
    */
   SELECT r.rolname INTO target_user FROM pg_roles r WHERE
     has_server_privilege(r.rolname, server, 'USAGE') AND
@@ -281,7 +287,7 @@ BEGIN
       (SELECT um.usename FROM pg_user_mappings um
         WHERE um.usename <> 'public' AND um.srvname = server) AND
     r.rolname NOT LIKE 'pg\_%'
-    ORDER BY r.rolname LIMIT 1;
+    ORDER BY r.rolsuper DESC, r.rolname LIMIT 1;
   RETURN target_user;
 END;
 $$ LANGUAGE plpgsql;
