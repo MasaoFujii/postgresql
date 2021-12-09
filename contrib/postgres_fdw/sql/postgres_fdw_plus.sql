@@ -10,6 +10,14 @@
 SET debug_discard_caches = 0;
 
 -- ===================================================================
+-- Drop previously-created FDW objects that may have unexpected effect
+-- on this test, to make the tests stable
+-- ===================================================================
+SET client_min_messages TO 'error';
+DROP EXTENSION IF EXISTS postgres_fdw CASCADE;
+RESET client_min_messages;
+
+-- ===================================================================
 -- Create database users
 -- ===================================================================
 CREATE ROLE regress_pgfdw_local_super1 SUPERUSER;
@@ -21,8 +29,7 @@ SET ROLE regress_pgfdw_local_super1;
 -- ===================================================================
 -- Create FDW objects
 -- ===================================================================
-
--- postgres_fdw was already installed in postgres_fdw.sql.
+CREATE EXTENSION postgres_fdw;
 
 DO $d$
     BEGIN
@@ -51,12 +58,6 @@ CREATE USER MAPPING FOR CURRENT_USER SERVER pgfdw_plus_loopback2
 CREATE FOREIGN DATA WRAPPER pgfdw_plus_dummy;
 CREATE SERVER pgfdw_plus_dummy_server FOREIGN DATA WRAPPER pgfdw_plus_dummy;
 CREATE USER MAPPING FOR PUBLIC SERVER pgfdw_plus_dummy_server;
-
--- Drop previously-created server that may have unexpected effect
--- on this test, to make the tests stable.
-SET client_min_messages TO 'error';
-DROP SERVER IF EXISTS testserver1 CASCADE;
-RESET client_min_messages;
 
 -- ===================================================================
 -- Create objects used by local transaction or through FDW
