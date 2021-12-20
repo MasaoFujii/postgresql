@@ -186,28 +186,28 @@ SELECT * FROM pg_prepared_xacts;
 SELECT array_length(umids, 1) FROM pgfdw_plus.xact_commits ORDER BY fxid;
 
 -- ===================================================================
--- Test error cases of pg_foreign_prepared_xacts and
--- pg_resolve_foreign_prepared_xacts
+-- Test error cases of pgfdw_plus_foreign_prepared_xacts and
+-- pgfdw_plus_resolve_foreign_prepared_xacts
 -- ===================================================================
 -- Should fail because specified server doesn't exist.
-SELECT * FROM pg_foreign_prepared_xacts('nonexistent');
-SELECT * FROM pg_resolve_foreign_prepared_xacts('nonexistent');
+SELECT * FROM pgfdw_plus_foreign_prepared_xacts('nonexistent');
+SELECT * FROM pgfdw_plus_resolve_foreign_prepared_xacts('nonexistent');
 
 -- Should fail because there is no user mapping for specified server and
 -- current user.
 SET ROLE regress_pgfdw_local_super2;
-SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
-SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SELECT * FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SELECT * FROM pgfdw_plus_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
 SET ROLE regress_pgfdw_local_super1;
 
 -- Should fail because foreign data wrapper of specified server
 -- is not postgres_fdw.
-SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_dummy_server');
-SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_dummy_server');
+SELECT * FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_dummy_server');
+SELECT * FROM pgfdw_plus_resolve_foreign_prepared_xacts('pgfdw_plus_dummy_server');
 
 -- Should fail because dblink has not been installed yet.
-SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
-SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT * FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT * FROM pgfdw_plus_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
 
 -- ===================================================================
 -- Test functions to resolve foreign prepared transactions
@@ -216,14 +216,14 @@ CREATE EXTENSION dblink;
 
 -- These functions should return 0 rows because there are no foreign
 -- prepared transactions.
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all();
 
 -- xact_commits should be emptied because there are no foreign
 -- prepared transactions.
 SELECT count(*) FROM pgfdw_plus.xact_commits;
-SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
 SELECT count(*) FROM pgfdw_plus.xact_commits;
 
 -- Enable skip_commit_phase to create foreign prepared transactions.
@@ -234,24 +234,24 @@ BEGIN;
 INSERT INTO ft1 VALUES (200);
 INSERT INTO ft2 VALUES (200);
 COMMIT;
-SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
-SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SELECT count(*) FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT count(*) FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback2');
 SELECT count(*) FROM pgfdw_plus.xact_commits;
 
 -- Resolve foreign prepared transactions on only one of servers.
 SELECT status, count(*)
-  FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1')
+  FROM pgfdw_plus_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1')
   GROUP BY status ORDER BY status;
-SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
-SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SELECT count(*) FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT count(*) FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback2');
 
 -- xact_commits still should have one row referencing to foreign prepared
 -- transactions on the other server.
-SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
 SELECT count(*) FROM pgfdw_plus.xact_commits;
 
 -- Create one foreign prepared transaction that should be rollbacked
--- so as to test later whether pg_resolve_foreign_prepared_xacts_all()
+-- so as to test later whether pgfdw_plus_resolve_foreign_prepared_xacts_all()
 -- can actually rollback it.
 BEGIN;
 INSERT INTO ft1 VALUES (210);
@@ -268,17 +268,17 @@ COMMIT;
 
 -- All foreign prepared transactions are resolved and xact_commits
 -- should be empty.
-SELECT status, count(*) FROM pg_resolve_foreign_prepared_xacts_all()
+SELECT status, count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all()
   GROUP BY status ORDER BY status;
-SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
-SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
-SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT count(*) FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
 SELECT count(*) FROM pgfdw_plus.xact_commits;
 
--- Should fail because pg_vacuum_xact_commits() cannot be executed
+-- Should fail because pgfdw_plus_vacuum_xact_commits() cannot be executed
 -- in read-only transaction.
 BEGIN READ ONLY;
-SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
 COMMIT;
 
 -- ===================================================================
@@ -308,7 +308,7 @@ ROLLBACK TO SAVEPOINT s;
 COMMIT;
 SELECT split_part(query, '_', 1) FROM pg_stat_activity
     WHERE application_name LIKE 'pgfdw_plus_loopback%' ORDER BY query;
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all();
 
 -- DEALLOCATE ALL should not run because a subtransaction is not aborted.
 BEGIN;
@@ -318,7 +318,7 @@ INSERT INTO ft2 VALUES (320);
 COMMIT;
 SELECT split_part(query, '_', 1) FROM pg_stat_activity
     WHERE application_name LIKE 'pgfdw_plus_loopback%' ORDER BY query;
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all();
 
 -- ===================================================================
 -- Test functions executed by non-superusers
@@ -345,7 +345,7 @@ GRANT ALL ON FOREIGN SERVER pgfdw_plus_loopback1 TO regress_pgfdw_local_normal1;
 GRANT ALL ON FOREIGN SERVER pgfdw_plus_loopback1 TO regress_pgfdw_local_normal4;
 
 -- Allow these non-superusers to readd and write xact_commits in
--- pg_vacuum_xact_commits().
+-- pgfdw_plus_vacuum_xact_commits().
 GRANT ALL ON SCHEMA pgfdw_plus TO regress_pgfdw_local_normal1;
 GRANT ALL ON TABLE pgfdw_plus.xact_commits TO regress_pgfdw_local_normal1;
 GRANT ALL ON SCHEMA pgfdw_plus TO regress_pgfdw_local_normal4;
@@ -354,29 +354,29 @@ GRANT ALL ON TABLE pgfdw_plus.xact_commits TO regress_pgfdw_local_normal4;
 -- Server with user mapping for superuser or public should be skipped,
 -- but that for regress_pgfdw_local_normal1 not.
 SET ROLE regress_pgfdw_local_normal1;
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
-SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
 
 -- Server with user mapping for superuser should be skipped, but that
 -- for public or regress_pgfdw_local_normal1 not. Because
 -- regress_pgfdw_local_normal3 can use public mapping and has indirect
 -- membership in regress_pgfdw_local_normal1.
 SET ROLE regress_pgfdw_local_normal3;
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
-SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
 
 -- Server with user mapping for superuser or regress_pgfdw_local_normal1
 -- should be skipped, but that for public not. Because regress_pgfdw_local_normal4
 -- can use public mapping but has no membership in regress_pgfdw_local_normal1.
 SET ROLE regress_pgfdw_local_normal4;
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
-SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
 
 -- No server should be skipped because current user is superuser and
 -- also can be set to user who can use public mapping.
 SET ROLE regress_pgfdw_local_super1;
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
-SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
 
 -- ===================================================================
 -- Reset global settings

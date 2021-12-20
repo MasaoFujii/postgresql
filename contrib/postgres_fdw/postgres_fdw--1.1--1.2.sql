@@ -19,7 +19,7 @@ CREATE TABLE pgfdw_plus.xact_commits (
  * Retrieve information about foreign prepared transactions
  * from given server.
  */
-CREATE FUNCTION pg_foreign_prepared_xacts (server name)
+CREATE FUNCTION pgfdw_plus_foreign_prepared_xacts (server name)
   RETURNS SETOF pg_prepared_xacts AS $$
 DECLARE
   sql text;
@@ -66,7 +66,7 @@ $$ LANGUAGE plpgsql;
  * Note that here transaction is considered as running
  * until it and its all foreign transactions have been completed.
  */
-CREATE FUNCTION pg_xact_is_running(target_xid xid, target_pid integer)
+CREATE FUNCTION pgfdw_plus_xact_is_running(target_xid xid, target_pid integer)
   RETURNS boolean AS $$
 DECLARE
   r record;
@@ -115,7 +115,7 @@ $$ LANGUAGE plpgsql;
 
 
 /*
- * Data type for record that pg_resolve_foreign_prepared_xacts()
+ * Data type for record that pgfdw_plus_resolve_foreign_prepared_xacts()
  * and _all() return.
  */
 CREATE TYPE type_resolve_foreign_prepared_xacts AS
@@ -127,7 +127,7 @@ CREATE TYPE type_resolve_foreign_prepared_xacts AS
  * Resolve foreign prepared transactions on given server.
  */
 CREATE FUNCTION
-  pg_resolve_foreign_prepared_xacts (server name, force boolean DEFAULT false)
+  pgfdw_plus_resolve_foreign_prepared_xacts (server name, force boolean DEFAULT false)
   RETURNS SETOF type_resolve_foreign_prepared_xacts AS $$
 DECLARE
   r type_resolve_foreign_prepared_xacts;
@@ -137,7 +137,7 @@ DECLARE
   connected boolean := false;
 BEGIN
   FOR r IN SELECT NULL AS status, server, *
-    FROM pg_foreign_prepared_xacts(server) LOOP
+    FROM pgfdw_plus_foreign_prepared_xacts(server) LOOP
     sql := NULL;
 
     BEGIN
@@ -151,7 +151,7 @@ BEGIN
        * prepared transactions at the same time, and which would cause
        * either of them to fail with an error.
        */
-      CONTINUE WHEN pg_xact_is_running(full_xid::xid, pid);
+      CONTINUE WHEN pgfdw_plus_xact_is_running(full_xid::xid, pid);
 
       /*
        * At first use pg_xact_status() to check commit status of transaction
@@ -222,7 +222,7 @@ $$ LANGUAGE plpgsql;
  * Return true if successful, false otherwise. Note that false is returned
  * if given user is NULL or 'public'.
  */
-CREATE FUNCTION pg_set_current_user(usename name) RETURNS boolean AS $$
+CREATE FUNCTION pgfdw_plus_set_current_user(usename name) RETURNS boolean AS $$
 DECLARE
   errmsg text;
 BEGIN
@@ -261,7 +261,7 @@ $$ LANGUAGE plpgsql;
  *
  * Return name of such user if found, NULL otherwise.
  */
-CREATE FUNCTION pg_user_for_public_mapping(server name)
+CREATE FUNCTION pgfdw_plus_user_for_public_mapping(server name)
   RETURNS name AS $$
 DECLARE
   target_user name := NULL;
@@ -296,7 +296,7 @@ $$ LANGUAGE plpgsql;
  * Resolve foreign prepared transactions on all servers.
  */
 CREATE FUNCTION
-  pg_resolve_foreign_prepared_xacts_all (force boolean DEFAULT false)
+  pgfdw_plus_resolve_foreign_prepared_xacts_all (force boolean DEFAULT false)
   RETURNS SETOF type_resolve_foreign_prepared_xacts AS $$
 DECLARE
   r RECORD;
@@ -314,12 +314,12 @@ BEGIN
     /*
      * If target user is 'public', find out user who can use this public
      * mapping and reset target user to it. If no such user is found,
-     * target user is reset to NULL and subsequent pg_set_current_user()
+     * target user is reset to NULL and subsequent pgfdw_plus_set_current_user()
      * returns false.
      */
     target_user := r.usename;
     IF target_user = 'public' THEN
-      target_user := pg_user_for_public_mapping(r.srvname);
+      target_user := pgfdw_plus_user_for_public_mapping(r.srvname);
     END IF;
 
     /*
@@ -327,7 +327,7 @@ BEGIN
      * user mapping. If fail, resolutions of foreign prepared transactions on
      * this server are skipped.
      */
-    IF NOT pg_set_current_user(target_user) THEN
+    IF NOT pgfdw_plus_set_current_user(target_user) THEN
       RAISE NOTICE 'skipping server "%" with user mapping for "%"',
         r.srvname, r.usename;
       CONTINUE;
@@ -336,7 +336,7 @@ BEGIN
     /* Resolve foreign prepared transactions on one server */
     BEGIN
       RETURN QUERY SELECT *
-        FROM pg_resolve_foreign_prepared_xacts(r.srvname, force);
+        FROM pgfdw_plus_resolve_foreign_prepared_xacts(r.srvname, force);
     EXCEPTION WHEN OTHERS THEN
       GET STACKED DIAGNOSTICS errmsg = MESSAGE_TEXT;
       RAISE NOTICE 'could not resolve foreign prepared transactions on server "%"',
@@ -364,7 +364,7 @@ $$ LANGUAGE plpgsql;
  * server that it successfully fetched minimum full transaction ID from.
  */
 CREATE FUNCTION
-  pg_min_fxid_foreign_prepared_xacts_all(OUT fxmin xid8, OUT umids oid[])
+  pgfdw_plus_min_fxid_foreign_prepared_xacts_all(OUT fxmin xid8, OUT umids oid[])
   RETURNS record AS $$
 DECLARE
   r RECORD;
@@ -384,12 +384,12 @@ BEGIN
     /*
      * If target user is 'public', find out user who can use this public
      * mapping and reset target user to it. If no such user is found,
-     * target user is reset to NULL and subsequent pg_set_current_user()
+     * target user is reset to NULL and subsequent pgfdw_plus_set_current_user()
      * returns false.
      */
     target_user := r.usename;
     IF target_user = 'public' THEN
-      target_user := pg_user_for_public_mapping(r.srvname);
+      target_user := pgfdw_plus_user_for_public_mapping(r.srvname);
     END IF;
 
     /*
@@ -397,7 +397,7 @@ BEGIN
      * user mapping. If fail, we skip getting min fxid of foreign prepared
      * transactions on this server.
      */
-    IF NOT pg_set_current_user(target_user) THEN
+    IF NOT pgfdw_plus_set_current_user(target_user) THEN
       RAISE NOTICE 'skipping server "%" with user mapping for "%"',
         r.srvname, r.usename;
       CONTINUE;
@@ -410,7 +410,7 @@ BEGIN
        * PostgreSQL core hasn't supported yet min(xid8) aggregation function.
        */
       SELECT min(split_part(gid, '_', 2)::bigint)::text::xid8 INTO fxid
-        FROM pg_foreign_prepared_xacts(r.srvname);
+        FROM pgfdw_plus_foreign_prepared_xacts(r.srvname);
       IF fxid IS NOT NULL AND fxid < fxmin THEN
         fxmin := fxid;
       END IF;
@@ -438,15 +438,15 @@ $$ LANGUAGE plpgsql;
  * transactions, from xact_commits. This function returns
  * deleted records.
  */
-CREATE FUNCTION pg_vacuum_xact_commits()
+CREATE FUNCTION pgfdw_plus_vacuum_xact_commits()
   RETURNS SETOF pgfdw_plus.xact_commits AS $$
 DECLARE
   r record;
 BEGIN
   IF current_setting('transaction_read_only')::boolean THEN
-    RAISE EXCEPTION 'cannot execute pg_vacuum_xact_commits() in a read-only transaction';
+    RAISE EXCEPTION 'cannot execute pgfdw_plus_vacuum_xact_commits() in a read-only transaction';
   END IF;
-  SELECT * INTO r FROM pg_min_fxid_foreign_prepared_xacts_all();
+  SELECT * INTO r FROM pgfdw_plus_min_fxid_foreign_prepared_xacts_all();
   RETURN QUERY DELETE FROM pgfdw_plus.xact_commits xc
     WHERE xc.fxid < r.fxmin AND xc.umids <@ r.umids RETURNING *;
 END;

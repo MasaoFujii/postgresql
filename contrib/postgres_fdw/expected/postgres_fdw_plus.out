@@ -349,32 +349,32 @@ SELECT array_length(umids, 1) FROM pgfdw_plus.xact_commits ORDER BY fxid;
 (3 rows)
 
 -- ===================================================================
--- Test error cases of pg_foreign_prepared_xacts and
--- pg_resolve_foreign_prepared_xacts
+-- Test error cases of pgfdw_plus_foreign_prepared_xacts and
+-- pgfdw_plus_resolve_foreign_prepared_xacts
 -- ===================================================================
 -- Should fail because specified server doesn't exist.
-SELECT * FROM pg_foreign_prepared_xacts('nonexistent');
+SELECT * FROM pgfdw_plus_foreign_prepared_xacts('nonexistent');
 ERROR:  user mapping for server "nonexistent" and user "regress_pgfdw_local_super1" not found
-SELECT * FROM pg_resolve_foreign_prepared_xacts('nonexistent');
+SELECT * FROM pgfdw_plus_resolve_foreign_prepared_xacts('nonexistent');
 ERROR:  user mapping for server "nonexistent" and user "regress_pgfdw_local_super1" not found
 -- Should fail because there is no user mapping for specified server and
 -- current user.
 SET ROLE regress_pgfdw_local_super2;
-SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SELECT * FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback2');
 ERROR:  user mapping for server "pgfdw_plus_loopback2" and user "regress_pgfdw_local_super2" not found
-SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SELECT * FROM pgfdw_plus_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
 ERROR:  user mapping for server "pgfdw_plus_loopback2" and user "regress_pgfdw_local_super2" not found
 SET ROLE regress_pgfdw_local_super1;
 -- Should fail because foreign data wrapper of specified server
 -- is not postgres_fdw.
-SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_dummy_server');
+SELECT * FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_dummy_server');
 ERROR:  foreign data wrapper of specified server must be "postgres_fdw"
-SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_dummy_server');
+SELECT * FROM pgfdw_plus_resolve_foreign_prepared_xacts('pgfdw_plus_dummy_server');
 ERROR:  foreign data wrapper of specified server must be "postgres_fdw"
 -- Should fail because dblink has not been installed yet.
-SELECT * FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT * FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback1');
 ERROR:  extension "dblink" must be installed
-SELECT * FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT * FROM pgfdw_plus_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
 ERROR:  extension "dblink" must be installed
 -- ===================================================================
 -- Test functions to resolve foreign prepared transactions
@@ -382,19 +382,19 @@ ERROR:  extension "dblink" must be installed
 CREATE EXTENSION dblink;
 -- These functions should return 0 rows because there are no foreign
 -- prepared transactions.
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1');
  count 
 -------
      0
 (1 row)
 
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts('pgfdw_plus_loopback2');
  count 
 -------
      0
 (1 row)
 
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all();
  count 
 -------
      0
@@ -408,7 +408,7 @@ SELECT count(*) FROM pgfdw_plus.xact_commits;
      3
 (1 row)
 
-SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
  count 
 -------
      3
@@ -428,13 +428,13 @@ BEGIN;
 INSERT INTO ft1 VALUES (200);
 INSERT INTO ft2 VALUES (200);
 COMMIT;
-SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT count(*) FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback1');
  count 
 -------
      1
 (1 row)
 
-SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SELECT count(*) FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback2');
  count 
 -------
      1
@@ -448,20 +448,20 @@ SELECT count(*) FROM pgfdw_plus.xact_commits;
 
 -- Resolve foreign prepared transactions on only one of servers.
 SELECT status, count(*)
-  FROM pg_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1')
+  FROM pgfdw_plus_resolve_foreign_prepared_xacts('pgfdw_plus_loopback1')
   GROUP BY status ORDER BY status;
   status   | count 
 -----------+-------
  committed |     1
 (1 row)
 
-SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT count(*) FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback1');
  count 
 -------
      0
 (1 row)
 
-SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SELECT count(*) FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback2');
  count 
 -------
      1
@@ -469,7 +469,7 @@ SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
 
 -- xact_commits still should have one row referencing to foreign prepared
 -- transactions on the other server.
-SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
  count 
 -------
      0
@@ -482,7 +482,7 @@ SELECT count(*) FROM pgfdw_plus.xact_commits;
 (1 row)
 
 -- Create one foreign prepared transaction that should be rollbacked
--- so as to test later whether pg_resolve_foreign_prepared_xacts_all()
+-- so as to test later whether pgfdw_plus_resolve_foreign_prepared_xacts_all()
 -- can actually rollback it.
 BEGIN;
 INSERT INTO ft1 VALUES (210);
@@ -516,7 +516,7 @@ server closed the connection unexpectedly
 	before or while processing the request.
 -- All foreign prepared transactions are resolved and xact_commits
 -- should be empty.
-SELECT status, count(*) FROM pg_resolve_foreign_prepared_xacts_all()
+SELECT status, count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all()
   GROUP BY status ORDER BY status;
   status   | count 
 -----------+-------
@@ -524,19 +524,19 @@ SELECT status, count(*) FROM pg_resolve_foreign_prepared_xacts_all()
  committed |     1
 (2 rows)
 
-SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback1');
+SELECT count(*) FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback1');
  count 
 -------
      0
 (1 row)
 
-SELECT count(*) FROM pg_foreign_prepared_xacts('pgfdw_plus_loopback2');
+SELECT count(*) FROM pgfdw_plus_foreign_prepared_xacts('pgfdw_plus_loopback2');
  count 
 -------
      0
 (1 row)
 
-SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
  count 
 -------
      1
@@ -548,11 +548,11 @@ SELECT count(*) FROM pgfdw_plus.xact_commits;
      0
 (1 row)
 
--- Should fail because pg_vacuum_xact_commits() cannot be executed
+-- Should fail because pgfdw_plus_vacuum_xact_commits() cannot be executed
 -- in read-only transaction.
 BEGIN READ ONLY;
-SELECT count(*) FROM pg_vacuum_xact_commits();
-ERROR:  cannot execute pg_vacuum_xact_commits() in a read-only transaction
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
+ERROR:  cannot execute pgfdw_plus_vacuum_xact_commits() in a read-only transaction
 COMMIT;
 -- ===================================================================
 -- Test that DEALLOCATE ALL is executed properly even when
@@ -592,7 +592,7 @@ SELECT split_part(query, '_', 1) FROM pg_stat_activity
  DEALLOCATE ALL
 (2 rows)
 
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all();
  count 
 -------
      2
@@ -612,7 +612,7 @@ SELECT split_part(query, '_', 1) FROM pg_stat_activity
  PREPARE TRANSACTION 'pgfdw
 (2 rows)
 
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all();
  count 
 -------
      2
@@ -638,7 +638,7 @@ GRANT ALL ON SCHEMA regress_pgfdw_plus TO regress_pgfdw_local_normal4;
 GRANT ALL ON FOREIGN SERVER pgfdw_plus_loopback1 TO regress_pgfdw_local_normal1;
 GRANT ALL ON FOREIGN SERVER pgfdw_plus_loopback1 TO regress_pgfdw_local_normal4;
 -- Allow these non-superusers to readd and write xact_commits in
--- pg_vacuum_xact_commits().
+-- pgfdw_plus_vacuum_xact_commits().
 GRANT ALL ON SCHEMA pgfdw_plus TO regress_pgfdw_local_normal1;
 GRANT ALL ON TABLE pgfdw_plus.xact_commits TO regress_pgfdw_local_normal1;
 GRANT ALL ON SCHEMA pgfdw_plus TO regress_pgfdw_local_normal4;
@@ -646,7 +646,7 @@ GRANT ALL ON TABLE pgfdw_plus.xact_commits TO regress_pgfdw_local_normal4;
 -- Server with user mapping for superuser or public should be skipped,
 -- but that for regress_pgfdw_local_normal1 not.
 SET ROLE regress_pgfdw_local_normal1;
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all();
 NOTICE:  skipping server "pgfdw_plus_loopback1" with user mapping for "public"
 NOTICE:  could not resolve foreign prepared transactions on server "pgfdw_plus_loopback1"
 DETAIL:  Error message: password is required
@@ -656,7 +656,7 @@ NOTICE:  skipping server "pgfdw_plus_loopback2" with user mapping for "regress_p
      0
 (1 row)
 
-SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
 NOTICE:  skipping server "pgfdw_plus_loopback1" with user mapping for "public"
 NOTICE:  could not retrieve minimum full transaction ID from server "pgfdw_plus_loopback1"
 DETAIL:  Error message: password is required
@@ -671,7 +671,7 @@ NOTICE:  skipping server "pgfdw_plus_loopback2" with user mapping for "regress_p
 -- regress_pgfdw_local_normal3 can use public mapping and has indirect
 -- membership in regress_pgfdw_local_normal1.
 SET ROLE regress_pgfdw_local_normal3;
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all();
 NOTICE:  could not resolve foreign prepared transactions on server "pgfdw_plus_loopback1"
 DETAIL:  Error message: password is required
 NOTICE:  could not resolve foreign prepared transactions on server "pgfdw_plus_loopback1"
@@ -682,7 +682,7 @@ NOTICE:  skipping server "pgfdw_plus_loopback2" with user mapping for "regress_p
      0
 (1 row)
 
-SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
 NOTICE:  could not retrieve minimum full transaction ID from server "pgfdw_plus_loopback1"
 DETAIL:  Error message: password is required
 NOTICE:  could not retrieve minimum full transaction ID from server "pgfdw_plus_loopback1"
@@ -697,7 +697,7 @@ NOTICE:  skipping server "pgfdw_plus_loopback2" with user mapping for "regress_p
 -- should be skipped, but that for public not. Because regress_pgfdw_local_normal4
 -- can use public mapping but has no membership in regress_pgfdw_local_normal1.
 SET ROLE regress_pgfdw_local_normal4;
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all();
 NOTICE:  could not resolve foreign prepared transactions on server "pgfdw_plus_loopback1"
 DETAIL:  Error message: password is required
 NOTICE:  skipping server "pgfdw_plus_loopback1" with user mapping for "regress_pgfdw_local_normal1"
@@ -707,7 +707,7 @@ NOTICE:  skipping server "pgfdw_plus_loopback2" with user mapping for "regress_p
      0
 (1 row)
 
-SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
 NOTICE:  could not retrieve minimum full transaction ID from server "pgfdw_plus_loopback1"
 DETAIL:  Error message: password is required
 NOTICE:  skipping server "pgfdw_plus_loopback1" with user mapping for "regress_pgfdw_local_normal1"
@@ -720,7 +720,7 @@ NOTICE:  skipping server "pgfdw_plus_loopback2" with user mapping for "regress_p
 -- No server should be skipped because current user is superuser and
 -- also can be set to user who can use public mapping.
 SET ROLE regress_pgfdw_local_super1;
-SELECT count(*) FROM pg_resolve_foreign_prepared_xacts_all();
+SELECT count(*) FROM pgfdw_plus_resolve_foreign_prepared_xacts_all();
 NOTICE:  could not resolve foreign prepared transactions on server "pgfdw_plus_loopback1"
 DETAIL:  Error message: password is required
  count 
@@ -728,7 +728,7 @@ DETAIL:  Error message: password is required
      0
 (1 row)
 
-SELECT count(*) FROM pg_vacuum_xact_commits();
+SELECT count(*) FROM pgfdw_plus_vacuum_xact_commits();
 NOTICE:  could not retrieve minimum full transaction ID from server "pgfdw_plus_loopback1"
 DETAIL:  Error message: password is required
  count 
