@@ -1729,6 +1729,16 @@ static struct config_bool ConfigureNamesBool[] =
 		check_transaction_deferrable, NULL, NULL
 	},
 	{
+		{"global_transaction", PGC_POSTMASTER, CLIENT_CONN_STATEMENT,
+			gettext_noop("Enables global transaction."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&global_transaction,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"row_security", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Enable row security."),
 			gettext_noop("When enabled, row security will be applied to all users.")

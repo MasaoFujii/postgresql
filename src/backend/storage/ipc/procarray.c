@@ -940,6 +940,19 @@ ProcArrayClearTransaction(PGPROC *proc)
 }
 
 /*
+ * MarkSnapshotNotReusable -- mark snapshot not reusable
+ */
+void
+MarkSnapshotNotReusable(void)
+{
+	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+
+	ShmemVariableCache->xactCompletionCount++;
+
+	LWLockRelease(ProcArrayLock);
+}
+
+/*
  * Update ShmemVariableCache->latestCompletedXid to point to latestXid if
  * currently older.
  */
@@ -2221,6 +2234,9 @@ GetSnapshotData(Snapshot snapshot)
 	TransactionId replication_slot_xmin = InvalidTransactionId;
 	TransactionId replication_slot_catalog_xmin = InvalidTransactionId;
 
+	LOCKTAG		tag;
+	bool		gtx_locked = false;
+
 	Assert(snapshot != NULL);
 
 	/*
@@ -2265,6 +2281,15 @@ GetSnapshotData(Snapshot snapshot)
 	{
 		LWLockRelease(ProcArrayLock);
 		return snapshot;
+	}
+
+	if (global_transaction && MyDatabaseId != InvalidOid)
+	{
+		LWLockRelease(ProcArrayLock);
+		gtx_locked = true;
+		SET_LOCKTAG_ADVISORY(tag, MyDatabaseId, PG_INT32_MAX, PG_INT32_MAX, 2);
+		(void) LockAcquire(&tag, ShareLock, false, false);
+		LWLockAcquire(ProcArrayLock, LW_SHARED);
 	}
 
 	latest_completed = ShmemVariableCache->latestCompletedXid;
@@ -2445,6 +2470,9 @@ GetSnapshotData(Snapshot snapshot)
 		MyProc->xmin = TransactionXmin = xmin;
 
 	LWLockRelease(ProcArrayLock);
+
+	if (gtx_locked)
+		LockRelease(&tag, ShareLock, false);
 
 	/* maintain state for GlobalVis* */
 	{

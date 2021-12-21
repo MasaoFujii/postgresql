@@ -70,6 +70,7 @@
 #include "storage/ipc.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
+#include "storage/procarray.h"
 #include "storage/procsignal.h"
 #include "storage/sinval.h"
 #include "tcop/fastpath.h"
@@ -4088,6 +4089,8 @@ PostgresMain(const char *dbname, const char *username)
 
 	/* We need to allow SIGINT, etc during the initial transaction */
 	PG_SETMASK(&UnBlockSig);
+
+	MarkSnapshotNotReusable();
 
 	/*
 	 * General initialization.

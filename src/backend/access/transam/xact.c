@@ -84,6 +84,8 @@ bool		XactDeferrable;
 
 int			synchronous_commit = SYNCHRONOUS_COMMIT_ON;
 
+bool		global_transaction = false;
+
 /*
  * CheckXidAlive is a xid value pointing to a possibly ongoing (sub)
  * transaction.  Currently, it is used in logical decoding.  It's possible
@@ -2515,6 +2517,14 @@ PrepareTransaction(void)
 	gxact = MarkAsPreparing(xid, prepareGID, prepared_at,
 							GetUserId(), MyDatabaseId);
 	prepareGID = NULL;
+
+	if (global_transaction)
+	{
+		LOCKTAG		tag;
+
+		SET_LOCKTAG_ADVISORY(tag, MyDatabaseId, PG_INT32_MAX, PG_INT32_MAX, 2);
+		(void) LockAcquire(&tag, ExclusiveLock, false, false);
+	}
 
 	/*
 	 * Collect data for the 2PC state file.  Note that in general, no actual
