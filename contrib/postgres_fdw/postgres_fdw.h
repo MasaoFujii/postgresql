@@ -158,6 +158,7 @@ extern int	ExtractConnectionOptions(List *defelems,
 									 const char **values);
 extern List *ExtractExtensionList(const char *extensionsString,
 								  bool warnOnMissing);
+extern int	ExtractXactIsoLevel(const char *value);
 extern char *pgfdw_application_name;
 extern int	pgfdw_two_phase_commit;
 extern bool pgfdw_skip_commit_phase;

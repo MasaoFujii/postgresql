@@ -69,6 +69,7 @@ typedef struct ConnCacheEntry
 	bool		invalidated;	/* true if reconnect is pending */
 	bool		keep_connections;	/* setting value of keep_connections
 									 * server option */
+	int			xact_isolation_level;	/* transaction isolation level */
 	Oid			serverid;		/* foreign server OID used to get server name */
 	bool		modified;		/* true if foreign table on foriegn server was
 								 * modified */
@@ -118,6 +119,7 @@ static bool pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime,
 static void pgfdw_abort_cleanup(ConnCacheEntry *entry, const char *sql,
 								bool toplevel);
 static bool UserMappingPasswordRequired(UserMapping *user);
+static int	ServerXactIsoLevel(ForeignServer *server);
 static bool disconnect_cached_connections(Oid serverid);
 static void pgfdw_prepare_xacts(ConnCacheEntry *entry);
 static void pgfdw_commit_prepared(ConnCacheEntry *entry);
@@ -325,6 +327,7 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 	entry->have_error = false;
 	entry->changing_xact_state = false;
 	entry->invalidated = false;
+	entry->xact_isolation_level = ServerXactIsoLevel(server);
 	entry->serverid = server->serverid;
 	entry->modified = false;
 	entry->server_hashvalue =
@@ -533,6 +536,22 @@ UserMappingPasswordRequired(UserMapping *user)
 	return true;
 }
 
+static int
+ServerXactIsoLevel(ForeignServer *server)
+{
+	ListCell   *cell;
+
+	foreach(cell, server->options)
+	{
+		DefElem    *def = (DefElem *) lfirst(cell);
+
+		if (strcmp(def->defname, "transaction_isolation") == 0)
+			return ExtractXactIsoLevel(defGetString(def));
+	}
+
+	return -1;
+}
+
 /*
  * For non-superusers, insist that the connstr specify a password.  This
  * prevents a password from being picked up from .pgpass, a service file, the
@@ -649,10 +668,14 @@ begin_remote_xact(ConnCacheEntry *entry)
 		elog(DEBUG3, "starting remote transaction on connection %p",
 			 entry->conn);
 
-		if (IsolationIsSerializable())
+		if (IsolationIsSerializable() ||
+			entry->xact_isolation_level == XACT_SERIALIZABLE)
 			sql = "START TRANSACTION ISOLATION LEVEL SERIALIZABLE";
-		else
+		else if (IsolationUsesXactSnapshot() ||
+				 entry->xact_isolation_level == XACT_REPEATABLE_READ)
 			sql = "START TRANSACTION ISOLATION LEVEL REPEATABLE READ";
+		else
+			sql = "START TRANSACTION ISOLATION LEVEL READ COMMITTED";
 		entry->changing_xact_state = true;
 		do_sql_command(entry->conn, sql);
 		entry->xact_depth = 1;
