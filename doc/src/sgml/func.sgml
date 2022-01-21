@@ -22446,10 +22446,12 @@ SELECT * FROM pg_ls_dir('.') WITH ORDINALITY AS t(ls,n);
         format, <function>pg_current_logfile</function> without an argument
         returns the path of the file having the first format found in the
         ordered list: <literal>stderr</literal>,
-        <literal>csvlog</literal>.  <literal>NULL</literal> is returned
-        if no log file has any of these formats.
+        <literal>csvlog</literal>, <literal>jsonlog</literal>.
+        <literal>NULL</literal> is returned if no log file has any of these
+        formats.
         To request information about a specific log file format, supply
-        either <literal>csvlog</literal> or <literal>stderr</literal> as the
+        either <literal>csvlog</literal>, <literal>jsonlog</literal> or
+        <literal>stderr</literal> as the
         value of the optional parameter. The result is <literal>NULL</literal>
         if the log format requested is not configured in
         <xref linkend="guc-log-destination"/>.
@@ -25421,7 +25423,9 @@ SELECT collation for ('foo' COLLATE "de_DE");
        </para>
        <para>
         Requests to log the memory contexts of the backend with the
-        specified process ID.  These memory contexts will be logged at
+        specified process ID.  This function can send the request to
+        backends and auxiliary processes except logger and statistics
+        collector.  These memory contexts will be logged at
         <literal>LOG</literal> message level. They will appear in
         the server log based on the log configuration set
         (See <xref linkend="runtime-config-logging"/> for more information),
@@ -26520,7 +26524,8 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
        </para>
        <para>
         Looks up a replication origin by name and returns the internal ID. If
-        no such replication origin is found an error is thrown.
+        no such replication origin is found, <literal>NULL</literal> is
+        returned.
        </para></entry>
       </row>
 

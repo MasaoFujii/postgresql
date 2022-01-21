@@ -1,7 +1,7 @@
 /*
  * psql - the PostgreSQL interactive terminal
  *
- * Copyright (c) 2000-2021, PostgreSQL Global Development Group
+ * Copyright (c) 2000-2022, PostgreSQL Global Development Group
  *
  * src/bin/psql/command.c
  */
@@ -558,19 +558,25 @@ exec_command_cd(PsqlScanState scan_state, bool active_branch, const char *cmd)
 		else
 		{
 #ifndef WIN32
-			struct passwd *pw;
-			uid_t		user_id = geteuid();
-
-			errno = 0;			/* clear errno before call */
-			pw = getpwuid(user_id);
-			if (!pw)
+			/* This should match get_home_path() */
+			dir = getenv("HOME");
+			if (dir == NULL || dir[0] == '\0')
 			{
-				pg_log_error("could not get home directory for user ID %ld: %s",
-							 (long) user_id,
-							 errno ? strerror(errno) : _("user does not exist"));
-				exit(EXIT_FAILURE);
+				uid_t		user_id = geteuid();
+				struct passwd *pw;
+
+				errno = 0;		/* clear errno before call */
+				pw = getpwuid(user_id);
+				if (pw)
+					dir = pw->pw_dir;
+				else
+				{
+					pg_log_error("could not get home directory for user ID %ld: %s",
+								 (long) user_id,
+								 errno ? strerror(errno) : _("user does not exist"));
+					success = false;
+				}
 			}
-			dir = pw->pw_dir;
 #else							/* WIN32 */
 
 			/*
@@ -581,7 +587,8 @@ exec_command_cd(PsqlScanState scan_state, bool active_branch, const char *cmd)
 #endif							/* WIN32 */
 		}
 
-		if (chdir(dir) == -1)
+		if (success &&
+			chdir(dir) < 0)
 		{
 			pg_log_error("\\%s: could not change directory to \"%s\": %m",
 						 cmd, dir);
@@ -811,7 +818,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				success = describeRoles(pattern, show_verbose, show_system);
 				break;
 			case 'l':
-				success = do_lo_list();
+				success = listLargeObjects(show_verbose);
 				break;
 			case 'L':
 				success = listLanguages(pattern, show_verbose, show_system);
@@ -1963,7 +1970,9 @@ exec_command_lo(PsqlScanState scan_state, bool active_branch, const char *cmd)
 		}
 
 		else if (strcmp(cmd + 3, "list") == 0)
-			success = do_lo_list();
+			success = listLargeObjects(false);
+		else if (strcmp(cmd + 3, "list+") == 0)
+			success = listLargeObjects(true);
 
 		else if (strcmp(cmd + 3, "unlink") == 0)
 		{
