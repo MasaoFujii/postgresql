@@ -4574,7 +4574,7 @@ binary_upgrade_set_type_oids_by_type_oid(Archive *fout,
 	{
 		if (fout->remoteVersion >= 140000)
 		{
-			appendPQExpBuffer(upgrade_query,
+			printfPQExpBuffer(upgrade_query,
 							  "SELECT t.oid, t.typarray "
 							  "FROM pg_catalog.pg_type t "
 							  "JOIN pg_catalog.pg_range r "
@@ -4714,7 +4714,6 @@ binary_upgrade_set_pg_class_oids(Archive *fout,
 		}
 
 		PQclear(upgrade_res);
-		destroyPQExpBuffer(upgrade_query);
 	}
 	else
 	{
@@ -4728,6 +4727,8 @@ binary_upgrade_set_pg_class_oids(Archive *fout,
 	}
 
 	appendPQExpBufferChar(upgrade_buffer, '\n');
+
+	destroyPQExpBuffer(upgrade_query);
 }
 
 /*
