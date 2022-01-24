@@ -1773,7 +1773,7 @@ disconnect_cached_connections(Oid serverid)
  * user mapping OID, process ID and cluster name.
  */
 #define PreparedXactCommand(sql, cmd, entry)	\
-	snprintf(sql, sizeof(sql), "%s 'pgfdw_%lu_%u_%d_%s'",	\
+	snprintf(sql, sizeof(sql), "%s 'pgfdw_" UINT64_FORMAT "_%u_%d_%s'",	\
 			 cmd, U64FromFullTransactionId(entry->fxid),	\
 			 (Oid) entry->key, MyProcPid,	\
 			 (*cluster_name == '\0') ? "null" : cluster_name)
