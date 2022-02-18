@@ -10,7 +10,7 @@ use File::Path qw(rmtree);
 use Fcntl qw(:seek);
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
-use Test::More tests => 143;
+use Test::More;
 
 program_help_ok('pg_basebackup');
 program_version_ok('pg_basebackup');
@@ -31,7 +31,8 @@ my @pg_basebackup_defs = ('pg_basebackup', '--no-sync', '-cfast');
 umask(0077);
 
 # Initialize node without replication settings
-$node->init(extra => ['--data-checksums']);
+$node->init(extra => ['--data-checksums'],
+			auth_extra => [ '--create-role', 'backupuser' ]);
 $node->start;
 my $pgdata = $node->data_dir;
 
@@ -516,9 +517,18 @@ $node->command_ok(
 	[ @pg_basebackup_defs, '--target', 'blackhole', '-X', 'none' ],
 	'backup target blackhole');
 $node->command_ok(
-	[ @pg_basebackup_defs, '--target', "server:$tempdir/backuponserver", '-X', 'none' ],
+	[ @pg_basebackup_defs, '--target', "server:$real_tempdir/backuponserver", '-X', 'none' ],
 	'backup target server');
 ok(-f "$tempdir/backuponserver/base.tar", 'backup tar was created');
+rmtree("$tempdir/backuponserver");
+
+$node->command_ok(
+	[qw(createuser --replication --role=pg_write_server_files backupuser)],
+	'create backup user');
+$node->command_ok(
+	[ @pg_basebackup_defs, '-U', 'backupuser', '--target', "server:$real_tempdir/backuponserver", '-X', 'none' ],
+	'backup target server');
+ok(-f "$tempdir/backuponserver/base.tar", 'backup tar was created as non-superuser');
 rmtree("$tempdir/backuponserver");
 
 $node->command_fails(
@@ -757,9 +767,8 @@ SKIP:
 	# Check the integrity of the files generated.
 	my $gzip = $ENV{GZIP_PROGRAM};
 	skip "program gzip is not found in your system", 1
-	  if ( !defined $gzip
-		|| $gzip eq ''
-		|| system_log($gzip, '--version') != 0);
+	  if (!defined $gzip
+		|| $gzip eq '');
 
 	my $gzip_is_valid =
 	  system_log($gzip, '--test', @zlib_files, @zlib_files2, @zlib_files3);
@@ -768,3 +777,5 @@ SKIP:
 	rmtree("$tempdir/backup_gzip2");
 	rmtree("$tempdir/backup_gzip3");
 }
+
+done_testing();

@@ -56,10 +56,16 @@
 typedef enum
 {
 	BACKUP_TARGET_BLACKHOLE,
-	BACKUP_TARGET_COMPAT,
 	BACKUP_TARGET_CLIENT,
 	BACKUP_TARGET_SERVER
 } backup_target_type;
+
+typedef enum
+{
+	BACKUP_COMPRESSION_NONE,
+	BACKUP_COMPRESSION_GZIP,
+	BACKUP_COMPRESSION_LZ4
+} basebackup_compression_type;
 
 typedef struct
 {
@@ -73,6 +79,8 @@ typedef struct
 	backup_target_type target;
 	char	   *target_detail;
 	backup_manifest_option manifest;
+	basebackup_compression_type	compression;
+	int			compression_level;
 	pg_checksum_type manifest_checksum_type;
 } basebackup_options;
 
@@ -707,11 +715,14 @@ parse_basebackup_options(List *options, basebackup_options *opt)
 	bool		o_target = false;
 	bool		o_target_detail = false;
 	char	   *target_str = "compat";	/* placate compiler */
+	bool		o_compression = false;
+	bool		o_compression_level = false;
 
 	MemSet(opt, 0, sizeof(*opt));
-	opt->target = BACKUP_TARGET_COMPAT;
+	opt->target = BACKUP_TARGET_CLIENT;
 	opt->manifest = MANIFEST_OPTION_NO;
 	opt->manifest_checksum_type = CHECKSUM_TYPE_CRC32C;
+	opt->compression = BACKUP_COMPRESSION_NONE;
 
 	foreach(lopt, options)
 	{
@@ -881,7 +892,43 @@ parse_basebackup_options(List *options, basebackup_options *opt)
 			opt->target_detail = optval;
 			o_target_detail = true;
 		}
+		else if (strcmp(defel->defname, "compression") == 0)
+		{
+			char	   *optval = defGetString(defel);
+
+			if (o_compression)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("duplicate option \"%s\"", defel->defname)));
+			if (strcmp(optval, "none") == 0)
+				opt->compression = BACKUP_COMPRESSION_NONE;
+			else if (strcmp(optval, "gzip") == 0)
+				opt->compression = BACKUP_COMPRESSION_GZIP;
+			else if (strcmp(optval, "lz4") == 0)
+				opt->compression = BACKUP_COMPRESSION_LZ4;
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("unrecognized compression algorithm: \"%s\"",
+								optval)));
+			o_compression = true;
+		}
+		else if (strcmp(defel->defname, "compression_level") == 0)
+		{
+			if (o_compression_level)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("duplicate option \"%s\"", defel->defname)));
+			opt->compression_level = defGetInt32(defel);
+			o_compression_level = true;
+		}
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("unrecognized base backup option: \"%s\"",
+							defel->defname)));
 	}
+
 	if (opt->label == NULL)
 		opt->label = "base backup";
 	if (opt->manifest == MANIFEST_OPTION_NO)
@@ -908,6 +955,11 @@ parse_basebackup_options(List *options, basebackup_options *opt)
 					 errmsg("target '%s' does not accept a target detail",
 							target_str)));
 	}
+
+	if (o_compression_level && !o_compression)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("compression level requires compression")));
 }
 
 
@@ -942,16 +994,11 @@ SendBaseBackup(BaseBackupCmd *cmd)
 	 * protocol. If the target is specifically 'client' then set up to stream
 	 * the backup to the client; otherwise, it's being sent someplace else and
 	 * should not be sent to the client.
-	 *
-	 * If the TARGET option was not specified, we must fall back to the older
-	 * and less capable copy-tablespace protocol.
 	 */
 	if (opt.target == BACKUP_TARGET_CLIENT)
 		sink = bbsink_copystream_new(true);
-	else if (opt.target != BACKUP_TARGET_COMPAT)
-		sink = bbsink_copystream_new(false);
 	else
-		sink = bbsink_copytblspc_new();
+		sink = bbsink_copystream_new(false);
 
 	/*
 	 * If a non-default backup target is in use, arrange to send the data
@@ -962,7 +1009,6 @@ SendBaseBackup(BaseBackupCmd *cmd)
 		case BACKUP_TARGET_BLACKHOLE:
 			/* Nothing to do, just discard data. */
 			break;
-		case BACKUP_TARGET_COMPAT:
 		case BACKUP_TARGET_CLIENT:
 			/* Nothing to do, handling above is sufficient. */
 			break;
@@ -974,6 +1020,12 @@ SendBaseBackup(BaseBackupCmd *cmd)
 	/* Set up network throttling, if client requested it */
 	if (opt.maxrate > 0)
 		sink = bbsink_throttle_new(sink, opt.maxrate);
+
+	/* Set up server-side compression, if client requested it */
+	if (opt.compression == BACKUP_COMPRESSION_GZIP)
+		sink = bbsink_gzip_new(sink, opt.compression_level);
+	else if (opt.compression == BACKUP_COMPRESSION_LZ4)
+		sink = bbsink_lz4_new(sink, opt.compression_level);
 
 	/* Set up progress reporting. */
 	sink = bbsink_progress_new(sink, opt.progress);
