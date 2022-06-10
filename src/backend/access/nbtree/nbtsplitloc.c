@@ -35,7 +35,6 @@ typedef struct
 	/* split point identifying fields (returned by _bt_findsplitloc) */
 	OffsetNumber firstrightoff; /* first origpage item on rightpage */
 	bool		newitemonleft;	/* new item goes on left, or right? */
-
 } SplitPoint;
 
 typedef struct
@@ -152,7 +151,7 @@ _bt_findsplitloc(Relation rel,
 	SplitPoint	leftpage,
 				rightpage;
 
-	opaque = (BTPageOpaque) PageGetSpecialPointer(origpage);
+	opaque = BTPageGetOpaque(origpage);
 	maxoff = PageGetMaxOffsetNumber(origpage);
 
 	/* Total free space available on a btree page, after fixed overhead */

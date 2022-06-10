@@ -402,6 +402,8 @@ InitSharedLatch(Latch *latch)
 void
 OwnLatch(Latch *latch)
 {
+	int			owner_pid;
+
 	/* Sanity checks */
 	Assert(latch->is_shared);
 
@@ -410,8 +412,9 @@ OwnLatch(Latch *latch)
 	Assert(selfpipe_readfd >= 0 && selfpipe_owner_pid == MyProcPid);
 #endif
 
-	if (latch->owner_pid != 0)
-		elog(ERROR, "latch already owned");
+	owner_pid = latch->owner_pid;
+	if (owner_pid != 0)
+		elog(PANIC, "latch already owned by PID %d", owner_pid);
 
 	latch->owner_pid = MyProcPid;
 }
@@ -648,7 +651,6 @@ SetLatch(Latch *latch)
 		 */
 	}
 #endif
-
 }
 
 /*
@@ -690,7 +692,7 @@ CreateWaitEventSet(MemoryContext context, int nevents)
 	 * Use MAXALIGN size/alignment to guarantee that later uses of memory are
 	 * aligned correctly. E.g. epoll_event might need 8 byte alignment on some
 	 * platforms, but earlier allocations like WaitEventSet and WaitEvent
-	 * might not sized to guarantee that when purely using sizeof().
+	 * might not be sized to guarantee that when purely using sizeof().
 	 */
 	sz += MAXALIGN(sizeof(WaitEventSet));
 	sz += MAXALIGN(sizeof(WaitEvent) * nevents);

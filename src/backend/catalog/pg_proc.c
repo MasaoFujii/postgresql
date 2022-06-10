@@ -35,6 +35,7 @@
 #include "parser/analyze.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_type.h"
+#include "pgstat.h"
 #include "rewrite/rewriteHandler.h"
 #include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
@@ -709,6 +710,10 @@ ProcedureCreate(const char *procedureName,
 			AtEOXact_GUC(true, save_nestlevel);
 	}
 
+	/* ensure that stats are dropped if transaction aborts */
+	if (!is_update)
+		pgstat_create_function(retval);
+
 	return myself;
 }
 
@@ -947,7 +952,7 @@ fmgr_sql_validator(PG_FUNCTION_ARGS)
 					RawStmt    *parsetree = lfirst_node(RawStmt, lc);
 					List	   *querytree_sublist;
 
-					querytree_sublist = pg_analyze_and_rewrite_params(parsetree,
+					querytree_sublist = pg_analyze_and_rewrite_withcb(parsetree,
 																	  prosrc,
 																	  (ParserSetupHook) sql_fn_parser_setup,
 																	  pinfo,

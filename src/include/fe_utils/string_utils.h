@@ -20,7 +20,7 @@
 #include "pqexpbuffer.h"
 
 /* Global variables controlling behavior of fmtId() and fmtQualifiedId() */
-extern int	quote_all_identifiers;
+extern PGDLLIMPORT int quote_all_identifiers;
 extern PQExpBuffer (*getLocalPQExpBuffer) (void);
 
 /* Functions */
@@ -55,10 +55,12 @@ extern bool processSQLNamePattern(PGconn *conn, PQExpBuffer buf,
 								  const char *pattern,
 								  bool have_where, bool force_escape,
 								  const char *schemavar, const char *namevar,
-								  const char *altnamevar, const char *visibilityrule);
+								  const char *altnamevar, const char *visibilityrule,
+								  PQExpBuffer dbnamebuf, int *dotcnt);
 
 extern void patternToSQLRegex(int encoding, PQExpBuffer dbnamebuf,
 							  PQExpBuffer schemabuf, PQExpBuffer namebuf,
-							  const char *pattern, bool force_escape);
+							  const char *pattern, bool force_escape,
+							  bool want_literal_dbname, int *dotcnt);
 
 #endif							/* STRING_UTILS_H */

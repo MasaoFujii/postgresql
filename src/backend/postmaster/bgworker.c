@@ -531,7 +531,7 @@ BackgroundWorkerStopNotifications(pid_t pid)
  * This is called during a normal ("smart" or "fast") database shutdown.
  * After this point, no new background workers will be started, so anything
  * that might be waiting for them needs to be kicked off its wait.  We do
- * that by cancelling the bgworker registration entirely, which is perhaps
+ * that by canceling the bgworker registration entirely, which is perhaps
  * overkill, but since we're shutting down it does not matter whether the
  * registration record sticks around.
  *
@@ -826,9 +826,9 @@ StartBackgroundWorker(void)
 
 	/*
 	 * Create a per-backend PGPROC struct in shared memory, except in the
-	 * EXEC_BACKEND case where this was done in SubPostmasterMain. We must
-	 * do this before we can use LWLocks (and in the EXEC_BACKEND case we
-	 * already had to do some stuff with LWLocks).
+	 * EXEC_BACKEND case where this was done in SubPostmasterMain. We must do
+	 * this before we can use LWLocks (and in the EXEC_BACKEND case we already
+	 * had to do some stuff with LWLocks).
 	 */
 #ifndef EXEC_BACKEND
 	InitProcess();

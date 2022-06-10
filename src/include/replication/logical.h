@@ -26,7 +26,8 @@ typedef LogicalOutputPluginWriterWrite LogicalOutputPluginWriterPrepareWrite;
 
 typedef void (*LogicalOutputPluginWriterUpdateProgress) (struct LogicalDecodingContext *lr,
 														 XLogRecPtr Ptr,
-														 TransactionId xid
+														 TransactionId xid,
+														 bool skipped_xact
 );
 
 typedef struct LogicalDecodingContext
@@ -106,6 +107,8 @@ typedef struct LogicalDecodingContext
 	bool		prepared_write;
 	XLogRecPtr	write_location;
 	TransactionId write_xid;
+	/* Are we processing the end LSN of a transaction? */
+	bool		end_xact;
 } LogicalDecodingContext;
 
 

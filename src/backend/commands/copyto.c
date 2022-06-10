@@ -97,7 +97,6 @@ typedef struct CopyToStateData
 	FmgrInfo   *out_functions;	/* lookup info for output functions */
 	MemoryContext rowcontext;	/* per-row evaluation context */
 	uint64		bytes_processed;	/* number of bytes processed so far */
-
 } CopyToStateData;
 
 /* DestReceiver for COPY (query) TO */
@@ -439,9 +438,9 @@ BeginCopyTo(ParseState *pstate,
 		 * Run parse analysis and rewrite.  Note this also acquires sufficient
 		 * locks on the source table(s).
 		 */
-		rewritten = pg_analyze_and_rewrite(raw_query,
-										   pstate->p_sourcetext, NULL, 0,
-										   NULL);
+		rewritten = pg_analyze_and_rewrite_fixedparams(raw_query,
+													   pstate->p_sourcetext, NULL, 0,
+													   NULL);
 
 		/* check that we got back something we can work with */
 		if (rewritten == NIL)
@@ -863,7 +862,7 @@ DoCopyTo(CopyToState cstate)
 
 				if (cstate->opts.csv_mode)
 					CopyAttributeOutCSV(cstate, colname, false,
-									list_length(cstate->attnumlist) == 1);
+										list_length(cstate->attnumlist) == 1);
 				else
 					CopyAttributeOutText(cstate, colname);
 			}

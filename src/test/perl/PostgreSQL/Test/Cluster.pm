@@ -36,7 +36,8 @@ PostgreSQL::Test::Cluster - class representing PostgreSQL server instance
   my ($stdout, $stderr, $timed_out);
   my $cmdret = $node->psql('postgres', 'SELECT pg_sleep(600)',
 	  stdout => \$stdout, stderr => \$stderr,
-	  timeout => 180, timed_out => \$timed_out,
+	  timeout => $PostgreSQL::Test::Utils::timeout_default,
+	  timed_out => \$timed_out,
 	  extra_params => ['--single-transaction'],
 	  on_error_die => 1)
   print "Sleep timed out" if $timed_out;
@@ -92,7 +93,6 @@ use warnings;
 
 use Carp;
 use Config;
-use Cwd;
 use Fcntl qw(:mode);
 use File::Basename;
 use File::Path qw(rmtree);
@@ -110,6 +110,10 @@ use Scalar::Util qw(blessed);
 
 our ($use_tcp, $test_localhost, $test_pghost, $last_host_assigned,
 	$last_port_assigned, @all_nodes, $died);
+
+# the minimum version we believe to be compatible with this package without
+# subclassing.
+our $min_compat = 12;
 
 INIT
 {
@@ -131,8 +135,8 @@ INIT
 		$test_pghost = PostgreSQL::Test::Utils::tempdir_short;
 		$test_pghost =~ s!\\!/!g if $PostgreSQL::Test::Utils::windows_os;
 	}
-	$ENV{PGHOST}        = $test_pghost;
-	$ENV{PGDATABASE}    = 'postgres';
+	$ENV{PGHOST}     = $test_pghost;
+	$ENV{PGDATABASE} = 'postgres';
 
 	# Tracking of last port value assigned to accelerate free port lookup.
 	$last_port_assigned = int(rand() * 16384) + 49152;
@@ -327,6 +331,20 @@ sub install_path
 
 =pod
 
+=item $node->pg_version()
+
+The version number for the node, from PostgreSQL::Version.
+
+=cut
+
+sub pg_version
+{
+	my ($self) = @_;
+	return $self->{_pg_version};
+}
+
+=pod
+
 =item $node->config_data($option)
 
 Return a string holding configuration data from pg_config, with $option
@@ -405,8 +423,10 @@ sub set_replication_conf
 	  or croak "set_replication_conf only works with the default host";
 
 	open my $hba, '>>', "$pgdata/pg_hba.conf";
-	print $hba "\n# Allow replication (set up by PostgreSQL::Test::Cluster.pm)\n";
-	if ($PostgreSQL::Test::Utils::windows_os && !$PostgreSQL::Test::Utils::use_unix_sockets)
+	print $hba
+	  "\n# Allow replication (set up by PostgreSQL::Test::Cluster.pm)\n";
+	if ($PostgreSQL::Test::Utils::windows_os
+		&& !$PostgreSQL::Test::Utils::use_unix_sockets)
 	{
 		print $hba
 		  "host replication all $test_localhost/32 sspi include_realm=1 map=regress\n";
@@ -455,10 +475,10 @@ sub init
 	mkdir $self->backup_dir;
 	mkdir $self->archive_dir;
 
-	PostgreSQL::Test::Utils::system_or_bail('initdb', '-D', $pgdata, '-A', 'trust', '-N',
-		@{ $params{extra} });
-	PostgreSQL::Test::Utils::system_or_bail($ENV{PG_REGRESS}, '--config-auth', $pgdata,
-		@{ $params{auth_extra} });
+	PostgreSQL::Test::Utils::system_or_bail('initdb', '-D', $pgdata, '-A',
+		'trust', '-N', @{ $params{extra} });
+	PostgreSQL::Test::Utils::system_or_bail($ENV{PG_REGRESS},
+		'--config-auth', $pgdata, @{ $params{auth_extra} });
 
 	open my $conf, '>>', "$pgdata/postgresql.conf";
 	print $conf "\n# Added by PostgreSQL::Test::Cluster.pm\n";
@@ -475,10 +495,6 @@ sub init
 	# belong before TEMP_CONFIG.
 	print $conf PostgreSQL::Test::Utils::slurp_file($ENV{TEMP_CONFIG})
 	  if defined $ENV{TEMP_CONFIG};
-
-	# XXX Neutralize any stats_temp_directory in TEMP_CONFIG.  Nodes running
-	# concurrently must not share a stats_temp_directory.
-	print $conf "stats_temp_directory = 'pg_stat_tmp'\n";
 
 	if ($params{allows_streaming})
 	{
@@ -575,7 +591,7 @@ sub adjust_conf
 	my $conffile = $self->data_dir . '/' . $filename;
 
 	my $contents = PostgreSQL::Test::Utils::slurp_file($conffile);
-	my @lines    = split(/\n/, $contents);
+	my @lines = split(/\n/, $contents);
 	my @result;
 	my $eq = $skip_equals ? '' : '= ';
 	foreach my $line (@lines)
@@ -634,25 +650,6 @@ sub backup
 	return;
 }
 
-=item $node->backup_fs_hot(backup_name)
-
-Create a backup with a filesystem level copy in subdirectory B<backup_name> of
-B<< $node->backup_dir >>, including WAL.
-
-Archiving must be enabled, as B<pg_start_backup()> and B<pg_stop_backup()> are
-used. This is not checked or enforced.
-
-The backup name is passed as the backup label to B<pg_start_backup()>.
-
-=cut
-
-sub backup_fs_hot
-{
-	my ($self, $backup_name) = @_;
-	$self->_backup_fs($backup_name, 1);
-	return;
-}
-
 =item $node->backup_fs_cold(backup_name)
 
 Create a backup with a filesystem level copy in subdirectory B<backup_name> of
@@ -666,52 +663,17 @@ Use B<backup> or B<backup_fs_hot> if you want to back up a running server.
 sub backup_fs_cold
 {
 	my ($self, $backup_name) = @_;
-	$self->_backup_fs($backup_name, 0);
-	return;
-}
-
-
-# Common sub of backup_fs_hot and backup_fs_cold
-sub _backup_fs
-{
-	my ($self, $backup_name, $hot) = @_;
-	my $backup_path = $self->backup_dir . '/' . $backup_name;
-	my $port        = $self->port;
-	my $name        = $self->name;
-
-	print "# Taking filesystem backup $backup_name from node \"$name\"\n";
-
-	if ($hot)
-	{
-		my $stdout = $self->safe_psql('postgres',
-			"SELECT * FROM pg_start_backup('$backup_name');");
-		print "# pg_start_backup: $stdout\n";
-	}
 
 	PostgreSQL::Test::RecursiveCopy::copypath(
 		$self->data_dir,
-		$backup_path,
+		$self->backup_dir . '/' . $backup_name,
 		filterfn => sub {
 			my $src = shift;
 			return ($src ne 'log' and $src ne 'postmaster.pid');
 		});
 
-	if ($hot)
-	{
-
-		# We ignore pg_stop_backup's return value. We also assume archiving
-		# is enabled; otherwise the caller will have to copy the remaining
-		# segments.
-		my $stdout =
-		  $self->safe_psql('postgres', 'SELECT * FROM pg_stop_backup();');
-		print "# pg_stop_backup: $stdout\n";
-	}
-
-	print "# Backup finished\n";
 	return;
 }
-
-
 
 =pod
 
@@ -863,8 +825,10 @@ sub start
 	# sub init) so that it does not get copied to standbys.
 	# -w is now the default but having it here does no harm and helps
 	# compatibility with older versions.
-	$ret = PostgreSQL::Test::Utils::system_log('pg_ctl', '-w', '-D', $self->data_dir, '-l',
-		$self->logfile, '-o', "--cluster-name=$name", 'start');
+	$ret = PostgreSQL::Test::Utils::system_log(
+		'pg_ctl', '-w',           '-D', $self->data_dir,
+		'-l',     $self->logfile, '-o', "--cluster-name=$name",
+		'start');
 
 	if ($ret != 0)
 	{
@@ -904,9 +868,7 @@ sub kill9
 	local %ENV = $self->_get_env();
 
 	print "### Killing node \"$name\" using signal 9\n";
-	# kill(9, ...) fails under msys Perl 5.8.8, so fall back on pg_ctl.
-	kill(9, $self->{_pid})
-	  or PostgreSQL::Test::Utils::system_or_bail('pg_ctl', 'kill', 'KILL', $self->{_pid});
+	kill(9, $self->{_pid});
 	$self->{_pid} = undef;
 	return;
 }
@@ -975,7 +937,8 @@ sub reload
 	local %ENV = $self->_get_env();
 
 	print "### Reloading node \"$name\"\n";
-	PostgreSQL::Test::Utils::system_or_bail('pg_ctl', '-D', $pgdata, 'reload');
+	PostgreSQL::Test::Utils::system_or_bail('pg_ctl', '-D', $pgdata,
+		'reload');
 	return;
 }
 
@@ -1001,8 +964,8 @@ sub restart
 
 	# -w is now the default but having it here does no harm and helps
 	# compatibility with older versions.
-	PostgreSQL::Test::Utils::system_or_bail('pg_ctl', '-w', '-D', $pgdata, '-l', $logfile,
-		'restart');
+	PostgreSQL::Test::Utils::system_or_bail('pg_ctl', '-w', '-D', $pgdata,
+		'-l', $logfile, 'restart');
 
 	$self->_update_pid(1);
 	return;
@@ -1027,8 +990,8 @@ sub promote
 	local %ENV = $self->_get_env();
 
 	print "### Promoting node \"$name\"\n";
-	PostgreSQL::Test::Utils::system_or_bail('pg_ctl', '-D', $pgdata, '-l', $logfile,
-		'promote');
+	PostgreSQL::Test::Utils::system_or_bail('pg_ctl', '-D', $pgdata, '-l',
+		$logfile, 'promote');
 	return;
 }
 
@@ -1051,8 +1014,8 @@ sub logrotate
 	local %ENV = $self->_get_env();
 
 	print "### Rotating log in node \"$name\"\n";
-	PostgreSQL::Test::Utils::system_or_bail('pg_ctl', '-D', $pgdata, '-l', $logfile,
-		'logrotate');
+	PostgreSQL::Test::Utils::system_or_bail('pg_ctl', '-D', $pgdata, '-l',
+		$logfile, 'logrotate');
 	return;
 }
 
@@ -1065,7 +1028,7 @@ sub enable_streaming
 
 	print "### Enabling streaming replication for node \"$name\"\n";
 	$self->append_conf(
-		'postgresql.conf', qq(
+		$self->_recovery_file, qq(
 primary_conninfo='$root_connstr'
 ));
 	$self->set_standby_mode();
@@ -1076,7 +1039,7 @@ primary_conninfo='$root_connstr'
 sub enable_restoring
 {
 	my ($self, $root_node, $standby) = @_;
-	my $path = PostgreSQL::Test::Utils::perl2host($root_node->archive_dir);
+	my $path = $root_node->archive_dir;
 	my $name = $self->name;
 
 	print "### Enabling WAL restore for node \"$name\"\n";
@@ -1094,7 +1057,7 @@ sub enable_restoring
 	  : qq{cp "$path/%f" "%p"};
 
 	$self->append_conf(
-		'postgresql.conf', qq(
+		$self->_recovery_file, qq(
 restore_command = '$copy_command'
 ));
 	if ($standby)
@@ -1107,6 +1070,8 @@ restore_command = '$copy_command'
 	}
 	return;
 }
+
+sub _recovery_file { return "postgresql.conf"; }
 
 =pod
 
@@ -1144,7 +1109,7 @@ sub set_standby_mode
 sub enable_archiving
 {
 	my ($self) = @_;
-	my $path   = PostgreSQL::Test::Utils::perl2host($self->archive_dir);
+	my $path   = $self->archive_dir;
 	my $name   = $self->name;
 
 	print "### Enabling WAL archiving for node \"$name\"\n";
@@ -1286,13 +1251,16 @@ sub new
 	my $testname = basename($0);
 	$testname =~ s/\.[^.]+$//;
 	my $node = {
-		_port    => $port,
-		_host    => $host,
-		_basedir => "$PostgreSQL::Test::Utils::tmp_check/t_${testname}_${name}_data",
-		_name    => $name,
+		_port => $port,
+		_host => $host,
+		_basedir =>
+		  "$PostgreSQL::Test::Utils::tmp_check/t_${testname}_${name}_data",
+		_name               => $name,
 		_logfile_generation => 0,
-		_logfile_base       => "$PostgreSQL::Test::Utils::log_path/${testname}_${name}",
-		_logfile            => "$PostgreSQL::Test::Utils::log_path/${testname}_${name}.log"
+		_logfile_base =>
+		  "$PostgreSQL::Test::Utils::log_path/${testname}_${name}",
+		_logfile =>
+		  "$PostgreSQL::Test::Utils::log_path/${testname}_${name}.log"
 	};
 
 	if ($params{install_path})
@@ -1307,15 +1275,30 @@ sub new
 
 	$node->dump_info;
 
-	# Add node to list of nodes
-	push(@all_nodes, $node);
-
 	$node->_set_pg_version;
 
-	my $v = $node->{_pg_version};
+	my $ver = $node->{_pg_version};
 
-	carp("PostgreSQL::Test::Cluster isn't fully compatible with version " . $v)
-	  if $v < 12;
+	# Use a subclass as defined below (or elsewhere) if this version
+	# isn't fully compatible. Warn if the version is too old and thus we don't
+	# have a subclass of this class.
+	if (ref $ver && $ver < $min_compat)
+	{
+		my $maj = $ver->major(separator => '_');
+		my $subclass = $class . "::V_$maj";
+		if ($subclass->isa($class))
+		{
+			bless $node, $subclass;
+		}
+		else
+		{
+			carp
+			  "PostgreSQL::Test::Cluster isn't fully compatible with version $ver";
+		}
+	}
+
+	# Add node to list of nodes
+	push(@all_nodes, $node);
 
 	return $node;
 }
@@ -1370,12 +1353,12 @@ sub _set_pg_version
 #
 # Routines that call Postgres binaries need to call this routine like this:
 #
-#    local %ENV = $self->_get_env{[%extra_settings]);
+#    local %ENV = $self->_get_env([%extra_settings]);
 #
 # A copy of the environment is taken and node's host and port settings are
-# added as PGHOST and PGPORT, Then the extra settings (if any) are applied.
-# Any setting in %extra_settings with a value that is undefined is deleted
-# the remainder are# set. Then the PATH and (DY)LD_LIBRARY_PATH are adjusted
+# added as PGHOST and PGPORT, then the extra settings (if any) are applied.
+# Any setting in %extra_settings with a value that is undefined is deleted;
+# the remainder are set. Then the PATH and (DY)LD_LIBRARY_PATH are adjusted
 # if the node's install path is set, and the copy environment is returned.
 #
 # The install path set in new() needs to be a directory containing
@@ -1568,7 +1551,8 @@ END
 		next if defined $ENV{'PG_TEST_NOCLEAN'};
 
 		# clean basedir on clean test invocation
-		$node->clean_node if $exit_code == 0 && PostgreSQL::Test::Utils::all_tests_passing();
+		$node->clean_node
+		  if $exit_code == 0 && PostgreSQL::Test::Utils::all_tests_passing();
 	}
 
 	$? = $exit_code;
@@ -1725,7 +1709,8 @@ e.g.
 	my ($stdout, $stderr, $timed_out);
 	my $cmdret = $node->psql('postgres', 'SELECT pg_sleep(600)',
 		stdout => \$stdout, stderr => \$stderr,
-		timeout => 180, timed_out => \$timed_out,
+		timeout => $PostgreSQL::Test::Utils::timeout_default,
+		timed_out => \$timed_out,
 		extra_params => ['--single-transaction'])
 
 will set $cmdret to undef and $timed_out to a true value.
@@ -1845,19 +1830,13 @@ sub psql
 		}
 	};
 
-	# Note: on Windows, IPC::Run seems to convert \r\n to \n in program output
-	# if we're using native Perl, but not if we're using MSys Perl.  So do it
-	# by hand in the latter case, here and elsewhere.
-
 	if (defined $$stdout)
 	{
-		$$stdout =~ s/\r\n/\n/g if $Config{osname} eq 'msys';
 		chomp $$stdout;
 	}
 
 	if (defined $$stderr)
 	{
-		$$stderr =~ s/\r\n/\n/g if $Config{osname} eq 'msys';
 		chomp $$stderr;
 	}
 
@@ -1905,7 +1884,8 @@ scalar reference.  This allows the caller to act on other parts of the system
 while idling this backend.
 
 The specified timer object is attached to the harness, as well.  It's caller's
-responsibility to select the timeout length, and to restart the timer after
+responsibility to set the timeout length (usually
+$PostgreSQL::Test::Utils::timeout_default), and to restart the timer after
 each command if the timeout is per-command.
 
 psql is invoked in tuples-only unaligned mode with reading of B<.psqlrc>
@@ -1993,9 +1973,10 @@ The process's stdin is sourced from the $stdin scalar reference,
 and its stdout and stderr go to the $stdout scalar reference.
 ptys are used so that psql thinks it's being called interactively.
 
-The specified timer object is attached to the harness, as well.
-It's caller's responsibility to select the timeout length, and to
-restart the timer after each command if the timeout is per-command.
+The specified timer object is attached to the harness, as well.  It's caller's
+responsibility to set the timeout length (usually
+$PostgreSQL::Test::Utils::timeout_default), and to restart the timer after
+each command if the timeout is per-command.
 
 psql is invoked in tuples-only unaligned mode with reading of B<.psqlrc>
 disabled.  That may be overridden by passing extra psql parameters.
@@ -2221,7 +2202,8 @@ sub connect_ok
 
 	if (@log_like or @log_unlike)
 	{
-		my $log_contents = PostgreSQL::Test::Utils::slurp_file($self->logfile, $log_location);
+		my $log_contents =
+		  PostgreSQL::Test::Utils::slurp_file($self->logfile, $log_location);
 
 		while (my $regex = shift @log_like)
 		{
@@ -2291,7 +2273,8 @@ sub connect_fails
 
 	if (@log_like or @log_unlike)
 	{
-		my $log_contents = PostgreSQL::Test::Utils::slurp_file($self->logfile, $log_location);
+		my $log_contents =
+		  PostgreSQL::Test::Utils::slurp_file($self->logfile, $log_location);
 
 		while (my $regex = shift @log_like)
 		{
@@ -2311,7 +2294,7 @@ sub connect_fails
 Run B<$query> repeatedly, until it returns the B<$expected> result
 ('t', or SQL boolean true, by default).
 Continues polling if B<psql> returns an error result.
-Times out after 180 seconds.
+Times out after $PostgreSQL::Test::Utils::timeout_default seconds.
 Returns 1 if successful, 0 if timed out.
 
 =cut
@@ -2329,7 +2312,7 @@ sub poll_query_until
 		'-d',                             $self->connstr($dbname)
 	];
 	my ($stdout, $stderr);
-	my $max_attempts = 180 * 10;
+	my $max_attempts = 10 * $PostgreSQL::Test::Utils::timeout_default;
 	my $attempts     = 0;
 
 	while ($attempts < $max_attempts)
@@ -2337,9 +2320,7 @@ sub poll_query_until
 		my $result = IPC::Run::run $cmd, '<', \$query,
 		  '>', \$stdout, '2>', \$stderr;
 
-		$stdout =~ s/\r\n/\n/g if $Config{osname} eq 'msys';
 		chomp($stdout);
-		$stderr =~ s/\r\n/\n/g if $Config{osname} eq 'msys';
 		chomp($stderr);
 
 		if ($stdout eq $expected && $stderr eq '')
@@ -2353,8 +2334,8 @@ sub poll_query_until
 		$attempts++;
 	}
 
-	# The query result didn't change in 180 seconds. Give up. Print the
-	# output from the last attempt, hopefully that's useful for debugging.
+	# Give up. Print the output from the last attempt, hopefully that's useful
+	# for debugging.
 	diag qq(poll_query_until timed out executing this query:
 $query
 expecting this output:
@@ -2489,7 +2470,8 @@ sub issues_sql_like
 
 	my $result = PostgreSQL::Test::Utils::run_log($cmd);
 	ok($result, "@$cmd exit code 0");
-	my $log = PostgreSQL::Test::Utils::slurp_file($self->logfile, $log_location);
+	my $log =
+	  PostgreSQL::Test::Utils::slurp_file($self->logfile, $log_location);
 	like($log, $expected_sql, "$test_name: SQL found in server log");
 	return;
 }
@@ -2509,8 +2491,7 @@ sub run_log
 
 	local %ENV = $self->_get_env();
 
-	PostgreSQL::Test::Utils::run_log(@_);
-	return;
+	return PostgreSQL::Test::Utils::run_log(@_);
 }
 
 =pod
@@ -2596,7 +2577,8 @@ sub wait_for_catchup
 	  unless exists($valid_modes{$mode});
 
 	# Allow passing of a PostgreSQL::Test::Cluster instance as shorthand
-	if (blessed($standby_name) && $standby_name->isa("PostgreSQL::Test::Cluster"))
+	if (blessed($standby_name)
+		&& $standby_name->isa("PostgreSQL::Test::Cluster"))
 	{
 		$standby_name = $standby_name->name;
 	}
@@ -2610,8 +2592,11 @@ sub wait_for_catchup
 	  . "_lsn to pass "
 	  . $target_lsn . " on "
 	  . $self->name . "\n";
-	my $query =
-	  qq[SELECT '$target_lsn' <= ${mode}_lsn AND state = 'streaming' FROM pg_catalog.pg_stat_replication WHERE application_name = '$standby_name';];
+	# Before release 12 walreceiver just set the application name to
+	# "walreceiver"
+	my $query = qq[SELECT '$target_lsn' <= ${mode}_lsn AND state = 'streaming'
+         FROM pg_catalog.pg_stat_replication
+         WHERE application_name IN ('$standby_name', 'walreceiver')];
 	$self->poll_query_until('postgres', $query)
 	  or croak "timed out waiting for catchup";
 	print "done\n";
@@ -2667,7 +2652,7 @@ sub wait_for_slot_catchup
 
 Waits for the contents of the server log file, starting at the given offset, to
 match the supplied regular expression.  Checks the entire log if no offset is
-given.  Times out after 180 seconds.
+given.  Times out after $PostgreSQL::Test::Utils::timeout_default seconds.
 
 If successful, returns the length of the entire log file, in bytes.
 
@@ -2678,14 +2663,15 @@ sub wait_for_log
 	my ($self, $regexp, $offset) = @_;
 	$offset = 0 unless defined $offset;
 
-	my $max_attempts = 180 * 10;
+	my $max_attempts = 10 * $PostgreSQL::Test::Utils::timeout_default;
 	my $attempts     = 0;
 
 	while ($attempts < $max_attempts)
 	{
-		my $log = PostgreSQL::Test::Utils::slurp_file($self->logfile, $offset);
+		my $log =
+		  PostgreSQL::Test::Utils::slurp_file($self->logfile, $offset);
 
-		return $offset+length($log) if ($log =~ m/$regexp/);
+		return $offset + length($log) if ($log =~ m/$regexp/);
 
 		# Wait 0.1 second before retrying.
 		usleep(100_000);
@@ -2693,7 +2679,6 @@ sub wait_for_log
 		$attempts++;
 	}
 
-	# The logs didn't match within 180 seconds. Give up.
 	croak "timed out waiting for match: $regexp";
 }
 
@@ -2849,9 +2834,6 @@ sub pg_recvlogical_upto
 		}
 	};
 
-	$stdout =~ s/\r\n/\n/g if $Config{osname} eq 'msys';
-	$stderr =~ s/\r\n/\n/g if $Config{osname} eq 'msys';
-
 	if (wantarray)
 	{
 		return ($ret, $stdout, $stderr, $timeout);
@@ -2867,8 +2849,82 @@ sub pg_recvlogical_upto
 
 =pod
 
+=item $node->corrupt_page_checksum(self, file, page_offset)
+
+Intentionally corrupt the checksum field of one page in a file.
+The server must be stopped for this to work reliably.
+
+The file name should be specified relative to the cluster datadir.
+page_offset had better be a multiple of the cluster's block size.
+
+=cut
+
+sub corrupt_page_checksum
+{
+	my ($self, $file, $page_offset) = @_;
+	my $pgdata = $self->data_dir;
+	my $pageheader;
+
+	open my $fh, '+<', "$pgdata/$file" or die "open($file) failed: $!";
+	binmode $fh;
+	sysseek($fh, $page_offset, 0) or die "sysseek failed: $!";
+	sysread($fh, $pageheader, 24) or die "sysread failed: $!";
+	# This inverts the pd_checksum field (only); see struct PageHeaderData
+	$pageheader ^= "\0\0\0\0\0\0\0\0\xff\xff";
+	sysseek($fh, $page_offset, 0) or die "sysseek failed: $!";
+	syswrite($fh, $pageheader) or die "syswrite failed: $!";
+	close $fh;
+
+	return;
+}
+
+=pod
+
 =back
 
 =cut
+
+##########################################################################
+
+package PostgreSQL::Test::Cluster::V_11
+  ;    ## no critic (ProhibitMultiplePackages)
+
+# parent.pm is not present in all perl versions before 5.10.1, so instead
+# do directly what it would do for this:
+# use parent -norequire, qw(PostgreSQL::Test::Cluster);
+push @PostgreSQL::Test::Cluster::V_11::ISA, 'PostgreSQL::Test::Cluster';
+
+# https://www.postgresql.org/docs/11/release-11.html
+
+# max_wal_senders + superuser_reserved_connections must be < max_connections
+# uses recovery.conf
+
+sub _recovery_file { return "recovery.conf"; }
+
+sub set_standby_mode
+{
+	my $self = shift;
+	$self->append_conf("recovery.conf", "standby_mode = on\n");
+}
+
+sub init
+{
+	my ($self, %params) = @_;
+	$self->SUPER::init(%params);
+	$self->adjust_conf('postgresql.conf', 'max_wal_senders',
+		$params{allows_streaming} ? 5 : 0);
+}
+
+##########################################################################
+
+package PostgreSQL::Test::Cluster::V_10
+  ;    ## no critic (ProhibitMultiplePackages)
+
+# use parent -norequire, qw(PostgreSQL::Test::Cluster::V_11);
+push @PostgreSQL::Test::Cluster::V_10::ISA, 'PostgreSQL::Test::Cluster::V_11';
+
+# https://www.postgresql.org/docs/10/release-10.html
+
+########################################################################
 
 1;

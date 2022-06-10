@@ -6,18 +6,14 @@
 
 use strict;
 use warnings;
-use Cwd;
-use Config;
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
 my $tempdir = PostgreSQL::Test::Utils::tempdir;
 
-test_bad_manifest(
-	'input string ended unexpectedly',
-	qr/could not parse backup manifest: parsing failed/,
-	<<EOM);
+test_bad_manifest('input string ended unexpectedly',
+	qr/could not parse backup manifest: parsing failed/, <<EOM);
 {
 EOM
 
@@ -192,7 +188,7 @@ sub test_fatal_error
 
 	my ($test_name, $manifest_contents) = @_;
 
-	test_bad_manifest($test_name, qr/fatal: $test_name/, $manifest_contents);
+	test_bad_manifest($test_name, qr/error: $test_name/, $manifest_contents);
 	return;
 }
 

@@ -72,6 +72,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/pg_bswap.h"
+#include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
@@ -443,7 +444,7 @@ CopyConvertBuf(CopyFromState cstate)
 			 * least one character, and a failure to do so means that we've
 			 * hit an invalid byte sequence.
 			 */
-			if (cstate->raw_reached_eof || unverifiedlen >= pg_database_encoding_max_length())
+			if (cstate->raw_reached_eof || unverifiedlen >= pg_encoding_max_length(cstate->file_encoding))
 				cstate->input_reached_error = true;
 			return;
 		}
@@ -758,12 +759,59 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 	/* only available for text or csv input */
 	Assert(!cstate->opts.binary);
 
-	/* on input just throw the header line away */
+	/* on input check that the header line is correct if needed */
 	if (cstate->cur_lineno == 0 && cstate->opts.header_line)
 	{
+		ListCell   *cur;
+		TupleDesc	tupDesc;
+
+		tupDesc = RelationGetDescr(cstate->rel);
+
 		cstate->cur_lineno++;
-		if (CopyReadLine(cstate))
-			return false;		/* done */
+		done = CopyReadLine(cstate);
+
+		if (cstate->opts.header_line == COPY_HEADER_MATCH)
+		{
+			int			fldnum;
+
+			if (cstate->opts.csv_mode)
+				fldct = CopyReadAttributesCSV(cstate);
+			else
+				fldct = CopyReadAttributesText(cstate);
+
+			if (fldct != list_length(cstate->attnumlist))
+				ereport(ERROR,
+						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+						 errmsg("wrong number of fields in header line: field count is %d, expected %d",
+								fldct, list_length(cstate->attnumlist))));
+
+			fldnum = 0;
+			foreach(cur, cstate->attnumlist)
+			{
+				int			attnum = lfirst_int(cur);
+				char	   *colName = cstate->raw_fields[attnum - 1];
+				Form_pg_attribute attr = TupleDescAttr(tupDesc, attnum - 1);
+
+				fldnum++;
+
+				if (colName == NULL)
+					ereport(ERROR,
+							(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+							 errmsg("column name mismatch in header line field %d: got null value (\"%s\"), expected \"%s\"",
+									fldnum, cstate->opts.null_print, NameStr(attr->attname))));
+
+				if (namestrcmp(&attr->attname, colName) != 0)
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+							 errmsg("column name mismatch in header line field %d: got \"%s\", expected \"%s\"",
+									fldnum, colName, NameStr(attr->attname))));
+				}
+			}
+		}
+
+		if (done)
+			return false;
 	}
 
 	cstate->cur_lineno++;
@@ -1124,14 +1172,12 @@ CopyReadLineText(CopyFromState cstate)
 		char		c;
 
 		/*
-		 * Load more data if needed.  Ideally we would just force four bytes
-		 * of read-ahead and avoid the many calls to
-		 * IF_NEED_REFILL_AND_NOT_EOF_CONTINUE(), but the COPY_OLD_FE protocol
-		 * does not allow us to read too far ahead or we might read into the
-		 * next data, so we read-ahead only as far we know we can.  One
-		 * optimization would be to read-ahead four byte here if
-		 * cstate->copy_src != COPY_OLD_FE, but it hardly seems worth it,
-		 * considering the size of the buffer.
+		 * Load more data if needed.
+		 *
+		 * TODO: We could just force four bytes of read-ahead and avoid the
+		 * many calls to IF_NEED_REFILL_AND_NOT_EOF_CONTINUE().  That was
+		 * unsafe with the old v2 COPY protocol, but we don't support that
+		 * anymore.
 		 */
 		if (input_buf_ptr >= copy_buf_len || need_data)
 		{
@@ -1166,9 +1212,6 @@ CopyReadLineText(CopyFromState cstate)
 			 * Force fetch of the next character if we don't already have it.
 			 * We need to do this before changing CSV state, in case one of
 			 * these characters is also the quote or escape character.
-			 *
-			 * Note: old-protocol does not like forced prefetch, but it's OK
-			 * here since we cannot validly be at EOF.
 			 */
 			if (c == '\\' || c == '\r')
 			{

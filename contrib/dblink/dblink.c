@@ -1004,7 +1004,6 @@ materializeResult(FunctionCallInfo fcinfo, PGconn *conn, PGresult *res)
 
 			/* clean up GUC settings, if we changed any */
 			restoreLocalGucs(nestlevel);
-
 		}
 	}
 	PG_FINALLY();
@@ -1928,12 +1927,6 @@ dblink_get_notify(PG_FUNCTION_ARGS)
 	PGconn	   *conn;
 	PGnotify   *notify;
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-	TupleDesc	tupdesc;
-	Tuplestorestate *tupstore;
-	MemoryContext per_query_ctx;
-	MemoryContext oldcontext;
-
-	prepTuplestoreResult(fcinfo);
 
 	dblink_init();
 	if (PG_NARGS() == 1)
@@ -1941,23 +1934,7 @@ dblink_get_notify(PG_FUNCTION_ARGS)
 	else
 		conn = pconn->conn;
 
-	/* create the tuplestore in per-query memory */
-	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
-	oldcontext = MemoryContextSwitchTo(per_query_ctx);
-
-	tupdesc = CreateTemplateTupleDesc(DBLINK_NOTIFY_COLS);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "notify_name",
-					   TEXTOID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "be_pid",
-					   INT4OID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "extra",
-					   TEXTOID, -1, 0);
-
-	tupstore = tuplestore_begin_heap(true, false, work_mem);
-	rsinfo->setResult = tupstore;
-	rsinfo->setDesc = tupdesc;
-
-	MemoryContextSwitchTo(oldcontext);
+	SetSingleFuncCall(fcinfo, 0);
 
 	PQconsumeInput(conn);
 	while ((notify = PQnotifies(conn)) != NULL)
@@ -1980,7 +1957,7 @@ dblink_get_notify(PG_FUNCTION_ARGS)
 		else
 			nulls[2] = true;
 
-		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 
 		PQfreemem(notify);
 		PQconsumeInput(conn);
@@ -2657,7 +2634,6 @@ deleteConnection(const char *name)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
 				 errmsg("undefined connection name")));
-
 }
 
 static void

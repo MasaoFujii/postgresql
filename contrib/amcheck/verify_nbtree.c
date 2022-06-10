@@ -249,6 +249,9 @@ bt_index_check_internal(Oid indrelid, bool parentcheck, bool heapallindexed,
 	Relation	indrel;
 	Relation	heaprel;
 	LOCKMODE	lockmode;
+	Oid			save_userid;
+	int			save_sec_context;
+	int			save_nestlevel;
 
 	if (parentcheck)
 		lockmode = ShareLock;
@@ -265,9 +268,27 @@ bt_index_check_internal(Oid indrelid, bool parentcheck, bool heapallindexed,
 	 */
 	heapid = IndexGetRelation(indrelid, true);
 	if (OidIsValid(heapid))
+	{
 		heaprel = table_open(heapid, lockmode);
+
+		/*
+		 * Switch to the table owner's userid, so that any index functions are
+		 * run as that user.  Also lock down security-restricted operations
+		 * and arrange to make GUC variable changes local to this command.
+		 */
+		GetUserIdAndSecContext(&save_userid, &save_sec_context);
+		SetUserIdAndSecContext(heaprel->rd_rel->relowner,
+							   save_sec_context | SECURITY_RESTRICTED_OPERATION);
+		save_nestlevel = NewGUCNestLevel();
+	}
 	else
+	{
 		heaprel = NULL;
+		/* Set these just to suppress "uninitialized variable" warnings */
+		save_userid = InvalidOid;
+		save_sec_context = -1;
+		save_nestlevel = -1;
+	}
 
 	/*
 	 * Open the target index relations separately (like relation_openrv(), but
@@ -325,6 +346,12 @@ bt_index_check_internal(Oid indrelid, bool parentcheck, bool heapallindexed,
 		bt_check_every_level(indrel, heaprel, heapkeyspace, parentcheck,
 							 heapallindexed, rootdescend);
 	}
+
+	/* Roll back any GUC changes executed by index functions */
+	AtEOXact_GUC(false, save_nestlevel);
+
+	/* Restore userid and security context */
+	SetUserIdAndSecContext(save_userid, save_sec_context);
 
 	/*
 	 * Release locks early. That's ok here because nothing in the called
@@ -691,7 +718,7 @@ bt_check_level_from_leftmost(BtreeCheckState *state, BtreeLevel level)
 		state->target = palloc_btree_page(state, state->targetblock);
 		state->targetlsn = PageGetLSN(state->target);
 
-		opaque = (BTPageOpaque) PageGetSpecialPointer(state->target);
+		opaque = BTPageGetOpaque(state->target);
 
 		if (P_IGNORE(opaque))
 		{
@@ -927,7 +954,7 @@ bt_recheck_sibling_links(BtreeCheckState *state,
 		LockBuffer(lbuf, BT_READ);
 		_bt_checkpage(state->rel, lbuf);
 		page = BufferGetPage(lbuf);
-		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+		opaque = BTPageGetOpaque(page);
 		if (P_ISDELETED(opaque))
 		{
 			/*
@@ -951,7 +978,7 @@ bt_recheck_sibling_links(BtreeCheckState *state,
 			LockBuffer(newtargetbuf, BT_READ);
 			_bt_checkpage(state->rel, newtargetbuf);
 			page = BufferGetPage(newtargetbuf);
-			opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+			opaque = BTPageGetOpaque(page);
 			/* btpo_prev_from_target may have changed; update it */
 			btpo_prev_from_target = opaque->btpo_prev;
 		}
@@ -1049,7 +1076,7 @@ bt_target_page_check(BtreeCheckState *state)
 	OffsetNumber max;
 	BTPageOpaque topaque;
 
-	topaque = (BTPageOpaque) PageGetSpecialPointer(state->target);
+	topaque = BTPageGetOpaque(state->target);
 	max = PageGetMaxOffsetNumber(state->target);
 
 	elog(DEBUG2, "verifying %u items on %s block %u", max,
@@ -1478,7 +1505,7 @@ bt_target_page_check(BtreeCheckState *state)
 					/* Get fresh copy of target page */
 					state->target = palloc_btree_page(state, state->targetblock);
 					/* Note that we deliberately do not update target LSN */
-					topaque = (BTPageOpaque) PageGetSpecialPointer(state->target);
+					topaque = BTPageGetOpaque(state->target);
 
 					/*
 					 * All !readonly checks now performed; just return
@@ -1552,7 +1579,7 @@ bt_right_page_check_scankey(BtreeCheckState *state)
 	OffsetNumber nline;
 
 	/* Determine target's next block number */
-	opaque = (BTPageOpaque) PageGetSpecialPointer(state->target);
+	opaque = BTPageGetOpaque(state->target);
 
 	/* If target is already rightmost, no right sibling; nothing to do here */
 	if (P_RIGHTMOST(opaque))
@@ -1588,7 +1615,7 @@ bt_right_page_check_scankey(BtreeCheckState *state)
 		CHECK_FOR_INTERRUPTS();
 
 		rightpage = palloc_btree_page(state, targetnext);
-		opaque = (BTPageOpaque) PageGetSpecialPointer(rightpage);
+		opaque = BTPageGetOpaque(rightpage);
 
 		if (!P_IGNORE(opaque) || P_RIGHTMOST(opaque))
 			break;
@@ -1893,7 +1920,7 @@ bt_child_highkey_check(BtreeCheckState *state,
 		else
 			page = palloc_btree_page(state, blkno);
 
-		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+		opaque = BTPageGetOpaque(page);
 
 		/* The first page we visit at the level should be leftmost */
 		if (first && !BlockNumberIsValid(state->prevrightlink) && !P_LEFTMOST(opaque))
@@ -1971,7 +1998,7 @@ bt_child_highkey_check(BtreeCheckState *state,
 			else
 				pivotkey_offset = target_downlinkoffnum;
 
-			topaque = (BTPageOpaque) PageGetSpecialPointer(state->target);
+			topaque = BTPageGetOpaque(state->target);
 
 			if (!offset_is_negative_infinity(topaque, pivotkey_offset))
 			{
@@ -2128,9 +2155,9 @@ bt_child_check(BtreeCheckState *state, BTScanInsert targetkey,
 	 * Check all items, rather than checking just the first and trusting that
 	 * the operator class obeys the transitive law.
 	 */
-	topaque = (BTPageOpaque) PageGetSpecialPointer(state->target);
+	topaque = BTPageGetOpaque(state->target);
 	child = palloc_btree_page(state, childblock);
-	copaque = (BTPageOpaque) PageGetSpecialPointer(child);
+	copaque = BTPageGetOpaque(child);
 	maxoffset = PageGetMaxOffsetNumber(child);
 
 	/*
@@ -2235,7 +2262,7 @@ static void
 bt_downlink_missing_check(BtreeCheckState *state, bool rightsplit,
 						  BlockNumber blkno, Page page)
 {
-	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	BTPageOpaque opaque = BTPageGetOpaque(page);
 	ItemId		itemid;
 	IndexTuple	itup;
 	Page		child;
@@ -2319,7 +2346,7 @@ bt_downlink_missing_check(BtreeCheckState *state, bool rightsplit,
 		CHECK_FOR_INTERRUPTS();
 
 		child = palloc_btree_page(state, childblk);
-		copaque = (BTPageOpaque) PageGetSpecialPointer(child);
+		copaque = BTPageGetOpaque(child);
 
 		if (P_ISLEAF(copaque))
 			break;
@@ -2780,7 +2807,7 @@ invariant_l_offset(BtreeCheckState *state, BTScanInsert key,
 		bool		nonpivot;
 
 		ritup = (IndexTuple) PageGetItem(state->target, itemid);
-		topaque = (BTPageOpaque) PageGetSpecialPointer(state->target);
+		topaque = BTPageGetOpaque(state->target);
 		nonpivot = P_ISLEAF(topaque) && upperbound >= P_FIRSTDATAKEY(topaque);
 
 		/* Get number of keys + heap TID for item to the right */
@@ -2895,7 +2922,7 @@ invariant_l_nontarget_offset(BtreeCheckState *state, BTScanInsert key,
 		bool		nonpivot;
 
 		child = (IndexTuple) PageGetItem(nontarget, itemid);
-		copaque = (BTPageOpaque) PageGetSpecialPointer(nontarget);
+		copaque = BTPageGetOpaque(nontarget);
 		nonpivot = P_ISLEAF(copaque) && upperbound >= P_FIRSTDATAKEY(copaque);
 
 		/* Get number of keys + heap TID for child/non-target item */
@@ -2954,7 +2981,7 @@ palloc_btree_page(BtreeCheckState *state, BlockNumber blocknum)
 	memcpy(page, BufferGetPage(buffer), BLCKSZ);
 	UnlockReleaseBuffer(buffer);
 
-	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	opaque = BTPageGetOpaque(page);
 
 	if (P_ISMETA(opaque) && blocknum != BTREE_METAPAGE)
 		ereport(ERROR,

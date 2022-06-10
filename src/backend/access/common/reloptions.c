@@ -142,6 +142,15 @@ static relopt_bool boolRelOpts[] =
 	},
 	{
 		{
+			"security_invoker",
+			"Privileges on underlying relations are checked as the invoking user, not the view owner",
+			RELOPT_KIND_VIEW,
+			AccessExclusiveLock
+		},
+		false
+	},
+	{
+		{
 			"vacuum_truncate",
 			"Enables vacuum to truncate empty pages at the end of this table",
 			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
@@ -466,7 +475,7 @@ static relopt_real realRelOpts[] =
 };
 
 /* values from StdRdOptIndexCleanup */
-relopt_enum_elt_def StdRdOptIndexCleanupValues[] =
+static relopt_enum_elt_def StdRdOptIndexCleanupValues[] =
 {
 	{"auto", STDRD_OPTION_VACUUM_INDEX_CLEANUP_AUTO},
 	{"on", STDRD_OPTION_VACUUM_INDEX_CLEANUP_ON},
@@ -481,7 +490,7 @@ relopt_enum_elt_def StdRdOptIndexCleanupValues[] =
 };
 
 /* values from GistOptBufferingMode */
-relopt_enum_elt_def gistBufferingOptValues[] =
+static relopt_enum_elt_def gistBufferingOptValues[] =
 {
 	{"auto", GIST_OPTION_BUFFERING_AUTO},
 	{"on", GIST_OPTION_BUFFERING_ON},
@@ -490,7 +499,7 @@ relopt_enum_elt_def gistBufferingOptValues[] =
 };
 
 /* values from ViewOptCheckOption */
-relopt_enum_elt_def viewCheckOptValues[] =
+static relopt_enum_elt_def viewCheckOptValues[] =
 {
 	/* no value for NOT_SET */
 	{"local", VIEW_OPTION_CHECK_OPTION_LOCAL},
@@ -1996,6 +2005,8 @@ view_reloptions(Datum reloptions, bool validate)
 	static const relopt_parse_elt tab[] = {
 		{"security_barrier", RELOPT_TYPE_BOOL,
 		offsetof(ViewOptions, security_barrier)},
+		{"security_invoker", RELOPT_TYPE_BOOL,
+		offsetof(ViewOptions, security_invoker)},
 		{"check_option", RELOPT_TYPE_ENUM,
 		offsetof(ViewOptions, check_option)}
 	};

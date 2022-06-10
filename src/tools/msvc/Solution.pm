@@ -216,6 +216,7 @@ sub GenerateFiles
 		CONFIGURE_ARGS             => '"' . $self->GetFakeConfigure() . '"',
 		DEF_PGPORT                 => $port,
 		DEF_PGPORT_STR             => qq{"$port"},
+		DLSUFFIX                   => '".dll"',
 		ENABLE_GSS                 => $self->{options}->{gss} ? 1 : undef,
 		ENABLE_NLS                 => $self->{options}->{nls} ? 1 : undef,
 		ENABLE_THREAD_SAFETY       => 1,
@@ -287,6 +288,7 @@ sub GenerateFiles
 		HAVE_HISTORY_TRUNCATE_FILE                  => undef,
 		HAVE_IFADDRS_H                              => undef,
 		HAVE_INET_ATON                              => undef,
+		HAVE_INET_PTON                              => 1,
 		HAVE_INT_TIMEZONE                           => 1,
 		HAVE_INT64                                  => undef,
 		HAVE_INT8                                   => undef,
@@ -311,11 +313,11 @@ sub GenerateFiles
 		HAVE_LIBXML2                                => undef,
 		HAVE_LIBXSLT                                => undef,
 		HAVE_LIBZ                   => $self->{options}->{zlib} ? 1 : undef,
+		HAVE_LIBZSTD                => undef,
 		HAVE_LINK                   => undef,
 		HAVE_LOCALE_T               => 1,
 		HAVE_LONG_INT_64            => undef,
 		HAVE_LONG_LONG_INT_64       => 1,
-		HAVE_LZ4_H                  => undef,
 		HAVE_MBARRIER_H             => undef,
 		HAVE_MBSTOWCS_L             => 1,
 		HAVE_MEMORY_H               => 1,
@@ -347,7 +349,7 @@ sub GenerateFiles
 		HAVE_READLINE_READLINE_H    => undef,
 		HAVE_READLINK               => undef,
 		HAVE_READV                  => undef,
-		HAVE_RL_COMPLETION_MATCHES               => undef,
+		HAVE_RL_COMPLETION_MATCHES  => undef,
 		HAVE_RL_COMPLETION_SUPPRESS_QUOTE        => undef,
 		HAVE_RL_FILENAME_COMPLETION_FUNCTION     => undef,
 		HAVE_RL_FILENAME_QUOTE_CHARACTERS        => undef,
@@ -507,6 +509,7 @@ sub GenerateFiles
 		USE_UNNAMED_POSIX_SEMAPHORES        => undef,
 		USE_WIN32_SEMAPHORES                => 1,
 		USE_WIN32_SHARED_MEMORY             => 1,
+		USE_ZSTD                            => undef,
 		WCSTOMBS_L_IN_XLOCALE               => undef,
 		WORDS_BIGENDIAN                     => undef,
 		XLOG_BLCKSZ       => 1024 * $self->{options}->{wal_blocksize},
@@ -537,8 +540,12 @@ sub GenerateFiles
 	if ($self->{options}->{lz4})
 	{
 		$define{HAVE_LIBLZ4} = 1;
-		$define{HAVE_LZ4_H}  = 1;
 		$define{USE_LZ4}     = 1;
+	}
+	if ($self->{options}->{zstd})
+	{
+		$define{HAVE_LIBZSTD} = 1;
+		$define{USE_ZSTD}     = 1;
 	}
 	if ($self->{options}->{openssl})
 	{
@@ -1082,6 +1089,11 @@ sub AddProject
 		$proj->AddIncludeDir($self->{options}->{lz4} . '\include');
 		$proj->AddLibrary($self->{options}->{lz4} . '\lib\liblz4.lib');
 	}
+	if ($self->{options}->{zstd})
+	{
+		$proj->AddIncludeDir($self->{options}->{zstd} . '\include');
+		$proj->AddLibrary($self->{options}->{zstd} . '\lib\libzstd.lib');
+	}
 	if ($self->{options}->{uuid})
 	{
 		$proj->AddIncludeDir($self->{options}->{uuid} . '\include');
@@ -1194,6 +1206,7 @@ sub GetFakeConfigure
 	$cfg .= ' --with-libxml'        if ($self->{options}->{xml});
 	$cfg .= ' --with-libxslt'       if ($self->{options}->{xslt});
 	$cfg .= ' --with-lz4'           if ($self->{options}->{lz4});
+	$cfg .= ' --with-zstd'          if ($self->{options}->{zstd});
 	$cfg .= ' --with-gssapi'        if ($self->{options}->{gss});
 	$cfg .= ' --with-icu'           if ($self->{options}->{icu});
 	$cfg .= ' --with-tcl'           if ($self->{options}->{tcl});

@@ -277,30 +277,15 @@ socket_close(int code, Datum arg)
 		secure_close(MyProcPort);
 
 		/*
-		 * On most platforms, we leave the socket open until the process dies.
-		 * This allows clients to perform a "synchronous close" if they care
-		 * --- wait till the transport layer reports connection closure, and
-		 * you can be sure the backend has exited.  Saves a kernel call, too.
+		 * Formerly we did an explicit close() here, but it seems better to
+		 * leave the socket open until the process dies.  This allows clients
+		 * to perform a "synchronous close" if they care --- wait till the
+		 * transport layer reports connection closure, and you can be sure the
+		 * backend has exited.
 		 *
-		 * However, that does not work on Windows: if the kernel closes the
-		 * socket it will invoke an "abortive shutdown" that discards any data
-		 * not yet sent to the client.  (This is a flat-out violation of the
-		 * TCP RFCs, but count on Microsoft not to care about that.)  To get
-		 * the spec-compliant "graceful shutdown" behavior, we must invoke
-		 * closesocket() explicitly.  When using OpenSSL, it seems that clean
-		 * shutdown also requires an explicit shutdown() call.
-		 *
-		 * This code runs late enough during process shutdown that we should
-		 * have finished all externally-visible shutdown activities, so that
-		 * in principle it's good enough to act as a synchronous close on
-		 * Windows too.  But it's a lot more fragile than the other way.
+		 * We do set sock to PGINVALID_SOCKET to prevent any further I/O,
+		 * though.
 		 */
-#ifdef WIN32
-		shutdown(MyProcPort->sock, SD_SEND);
-		closesocket(MyProcPort->sock);
-#endif
-
-		/* In any case, set sock to PGINVALID_SOCKET to prevent further I/O */
 		MyProcPort->sock = PGINVALID_SOCKET;
 	}
 }
@@ -349,7 +334,6 @@ StreamServerPort(int family, const char *hostName, unsigned short portNumber,
 	struct addrinfo hint;
 	int			listen_index = 0;
 	int			added = 0;
-	int			max_backends = GetMaxBackends();
 
 #ifdef HAVE_UNIX_SOCKETS
 	char		unixSocketPath[MAXPGPATH];
@@ -572,7 +556,7 @@ StreamServerPort(int family, const char *hostName, unsigned short portNumber,
 		 * intended to provide a clamp on the request on platforms where an
 		 * overly large request provokes a kernel error (are there any?).
 		 */
-		maxconn = max_backends * 2;
+		maxconn = MaxBackends * 2;
 		if (maxconn > PG_SOMAXCONN)
 			maxconn = PG_SOMAXCONN;
 
@@ -1983,8 +1967,8 @@ retry:
 			 * because no code should expect latches to survive across
 			 * CHECK_FOR_INTERRUPTS().
 			 */
-			 ResetLatch(MyLatch);
-			 goto retry;
+			ResetLatch(MyLatch);
+			goto retry;
 		}
 	}
 

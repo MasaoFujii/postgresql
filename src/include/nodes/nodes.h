@@ -35,6 +35,7 @@ typedef enum NodeTag
 	T_ProjectionInfo,
 	T_JunkFilter,
 	T_OnConflictSetState,
+	T_MergeActionState,
 	T_ResultRelInfo,
 	T_EState,
 	T_TupleTableSlot,
@@ -201,6 +202,18 @@ typedef enum NodeTag
 	T_FromExpr,
 	T_OnConflictExpr,
 	T_IntoClause,
+	T_JsonFormat,
+	T_JsonReturning,
+	T_JsonValueExpr,
+	T_JsonParseExpr,
+	T_JsonScalarExpr,
+	T_JsonSerializeExpr,
+	T_JsonConstructorExpr,
+	T_JsonExpr,
+	T_JsonCoercion,
+	T_JsonItemCoercions,
+	T_JsonTableParent,
+	T_JsonTableSibling,
 
 	/*
 	 * TAGS FOR EXPRESSION STATE NODES (execnodes.h)
@@ -266,6 +279,7 @@ typedef enum NodeTag
 	T_EquivalenceClass,
 	T_EquivalenceMember,
 	T_PathKey,
+	T_PathKeyInfo,
 	T_PathTarget,
 	T_RestrictInfo,
 	T_IndexClause,
@@ -279,6 +293,7 @@ typedef enum NodeTag
 	T_RollupData,
 	T_GroupingSetData,
 	T_StatisticExtInfo,
+	T_MergeAction,
 
 	/*
 	 * TAGS FOR MEMORY NODES (memnodes.h)
@@ -317,6 +332,7 @@ typedef enum NodeTag
 	T_InsertStmt,
 	T_DeleteStmt,
 	T_UpdateStmt,
+	T_MergeStmt,
 	T_SelectStmt,
 	T_ReturnStmt,
 	T_PLAssignStmt,
@@ -481,6 +497,7 @@ typedef enum NodeTag
 	T_CTESearchClause,
 	T_CTECycleClause,
 	T_CommonTableExpr,
+	T_MergeWhenClause,
 	T_RoleSpec,
 	T_TriggerTransition,
 	T_PartitionElem,
@@ -491,6 +508,22 @@ typedef enum NodeTag
 	T_VacuumRelation,
 	T_PublicationObjSpec,
 	T_PublicationTable,
+	T_JsonObjectConstructor,
+	T_JsonArrayConstructor,
+	T_JsonArrayQueryConstructor,
+	T_JsonAggConstructor,
+	T_JsonObjectAgg,
+	T_JsonArrayAgg,
+	T_JsonFuncExpr,
+	T_JsonIsPredicate,
+	T_JsonTable,
+	T_JsonTableColumn,
+	T_JsonTablePlan,
+	T_JsonCommon,
+	T_JsonArgument,
+	T_JsonKeyValue,
+	T_JsonBehavior,
+	T_JsonOutput,
 
 	/*
 	 * TAGS FOR REPLICATION GRAMMAR PARSE NODES (replnodes.h)
@@ -527,7 +560,8 @@ typedef enum NodeTag
 	T_SupportRequestSelectivity,	/* in nodes/supportnodes.h */
 	T_SupportRequestCost,		/* in nodes/supportnodes.h */
 	T_SupportRequestRows,		/* in nodes/supportnodes.h */
-	T_SupportRequestIndexCondition	/* in nodes/supportnodes.h */
+	T_SupportRequestIndexCondition, /* in nodes/supportnodes.h */
+	T_SupportRequestWFuncMonotonic	/* in nodes/supportnodes.h */
 } NodeTag;
 
 /*
@@ -671,7 +705,8 @@ extern bool equal(const void *a, const void *b);
  */
 typedef double Selectivity;		/* fraction of tuples a qualifier will pass */
 typedef double Cost;			/* execution cost (in page-access units) */
-typedef double Cardinality;		/* (estimated) number of rows or other integer count */
+typedef double Cardinality;		/* (estimated) number of rows or other integer
+								 * count */
 
 
 /*
@@ -686,7 +721,8 @@ typedef enum CmdType
 	CMD_SELECT,					/* select stmt */
 	CMD_UPDATE,					/* update stmt */
 	CMD_INSERT,					/* insert stmt */
-	CMD_DELETE,
+	CMD_DELETE,					/* delete stmt */
+	CMD_MERGE,					/* merge stmt */
 	CMD_UTILITY,				/* cmds like create, destroy, copy, vacuum,
 								 * etc. */
 	CMD_NOTHING					/* dummy command for instead nothing rules

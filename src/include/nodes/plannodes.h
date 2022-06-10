@@ -19,6 +19,7 @@
 #include "lib/stringinfo.h"
 #include "nodes/bitmapset.h"
 #include "nodes/lockoptions.h"
+#include "nodes/parsenodes.h"
 #include "nodes/primnodes.h"
 
 
@@ -43,7 +44,7 @@ typedef struct PlannedStmt
 {
 	NodeTag		type;
 
-	CmdType		commandType;	/* select|insert|update|delete|utility */
+	CmdType		commandType;	/* select|insert|update|delete|merge|utility */
 
 	uint64		queryId;		/* query identifier (copied from Query) */
 
@@ -120,7 +121,7 @@ typedef struct Plan
 	/*
 	 * planner's estimate of result size of this plan step
 	 */
-	Cardinality	plan_rows;		/* number of rows plan is expected to emit */
+	Cardinality plan_rows;		/* number of rows plan is expected to emit */
 	int			plan_width;		/* average row width in bytes */
 
 	/*
@@ -217,7 +218,7 @@ typedef struct ProjectSet
 typedef struct ModifyTable
 {
 	Plan		plan;
-	CmdType		operation;		/* INSERT, UPDATE, or DELETE */
+	CmdType		operation;		/* INSERT, UPDATE, DELETE, or MERGE */
 	bool		canSetTag;		/* do we set the command tag/es_processed? */
 	Index		nominalRelation;	/* Parent RT index for use of EXPLAIN */
 	Index		rootRelation;	/* Root RT index, if target is partitioned */
@@ -237,6 +238,8 @@ typedef struct ModifyTable
 	Node	   *onConflictWhere;	/* WHERE for ON CONFLICT UPDATE */
 	Index		exclRelRTI;		/* RTI of the EXCLUDED pseudo relation */
 	List	   *exclRelTlist;	/* tlist of the EXCLUDED pseudo relation */
+	List	   *mergeActionLists;	/* per-target-table lists of actions for
+									 * MERGE */
 } ModifyTable;
 
 struct PartitionPruneInfo;		/* forward reference to struct below */
@@ -533,16 +536,28 @@ typedef struct TidRangeScan
  * relation, we make this a descendant of Scan anyway for code-sharing
  * purposes.
  *
+ * SubqueryScanStatus caches the trivial_subqueryscan property of the node.
+ * SUBQUERY_SCAN_UNKNOWN means not yet determined.  This is only used during
+ * planning.
+ *
  * Note: we store the sub-plan in the type-specific subplan field, not in
  * the generic lefttree field as you might expect.  This is because we do
  * not want plan-tree-traversal routines to recurse into the subplan without
  * knowing that they are changing Query contexts.
  * ----------------
  */
+typedef enum SubqueryScanStatus
+{
+	SUBQUERY_SCAN_UNKNOWN,
+	SUBQUERY_SCAN_TRIVIAL,
+	SUBQUERY_SCAN_NONTRIVIAL
+} SubqueryScanStatus;
+
 typedef struct SubqueryScan
 {
 	Scan		scan;
 	Plan	   *subplan;
+	SubqueryScanStatus scanstatus;
 } SubqueryScan;
 
 /* ----------------
@@ -809,8 +824,9 @@ typedef struct Memoize
 	int			numKeys;		/* size of the two arrays below */
 
 	Oid		   *hashOperators;	/* hash operators for each key */
-	Oid		   *collations;		/* cache keys */
-	List	   *param_exprs;	/* exprs containing parameters */
+	Oid		   *collations;		/* collations for each key */
+	List	   *param_exprs;	/* cache keys in the form of exprs containing
+								 * parameters */
 	bool		singlerow;		/* true if the cache entry should be marked as
 								 * complete after we store the first tuple in
 								 * it. */
@@ -819,7 +835,7 @@ typedef struct Memoize
 	uint32		est_entries;	/* The maximum number of entries that the
 								 * planner expects will fit in the cache, or 0
 								 * if unknown */
-	Bitmapset   *keyparamids;	/* paramids from param_exprs */
+	Bitmapset  *keyparamids;	/* paramids from param_exprs */
 } Memoize;
 
 /* ----------------
@@ -911,12 +927,16 @@ typedef struct WindowAgg
 	int			frameOptions;	/* frame_clause options, see WindowDef */
 	Node	   *startOffset;	/* expression for starting bound, if any */
 	Node	   *endOffset;		/* expression for ending bound, if any */
+	List	   *runCondition;	/* qual to help short-circuit execution */
+	List	   *runConditionOrig;	/* runCondition for display in EXPLAIN */
 	/* these fields are used with RANGE offset PRECEDING/FOLLOWING: */
 	Oid			startInRangeFunc;	/* in_range function for startOffset */
 	Oid			endInRangeFunc; /* in_range function for endOffset */
 	Oid			inRangeColl;	/* collation for in_range tests */
 	bool		inRangeAsc;		/* use ASC sort order for in_range tests? */
 	bool		inRangeNullsFirst;	/* nulls sort first for in_range tests? */
+	bool		topWindow;		/* false for all apart from the WindowAgg
+								 * that's closest to the root of the plan */
 } WindowAgg;
 
 /* ----------------
@@ -994,7 +1014,7 @@ typedef struct Hash
 	AttrNumber	skewColumn;		/* outer join key's column #, or zero */
 	bool		skewInherit;	/* is outer join rel an inheritance tree? */
 	/* all other info is in the parent HashJoin node */
-	Cardinality	rows_total;		/* estimate total rows if parallel_aware */
+	Cardinality rows_total;		/* estimate total rows if parallel_aware */
 } Hash;
 
 /* ----------------
@@ -1308,5 +1328,22 @@ typedef struct PlanInvalItem
 	int			cacheId;		/* a syscache ID, see utils/syscache.h */
 	uint32		hashValue;		/* hash value of object's cache lookup key */
 } PlanInvalItem;
+
+/*
+ * MonotonicFunction
+ *
+ * Allows the planner to track monotonic properties of functions.  A function
+ * is monotonically increasing if a subsequent call cannot yield a lower value
+ * than the previous call.  A monotonically decreasing function cannot yield a
+ * higher value on subsequent calls, and a function which is both must return
+ * the same value on each call.
+ */
+typedef enum MonotonicFunction
+{
+	MONOTONICFUNC_NONE = 0,
+	MONOTONICFUNC_INCREASING = (1 << 0),
+	MONOTONICFUNC_DECREASING = (1 << 1),
+	MONOTONICFUNC_BOTH = MONOTONICFUNC_INCREASING | MONOTONICFUNC_DECREASING
+} MonotonicFunction;
 
 #endif							/* PLANNODES_H */

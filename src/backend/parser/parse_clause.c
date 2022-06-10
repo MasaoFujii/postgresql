@@ -696,7 +696,9 @@ transformRangeTableFunc(ParseState *pstate, RangeTableFunc *rtf)
 	char	  **names;
 	int			colno;
 
-	/* Currently only XMLTABLE is supported */
+	/* Currently only XMLTABLE and JSON_TABLE are supported */
+
+	tf->functype = TFT_XMLTABLE;
 	constructName = "XMLTABLE";
 	docType = XMLOID;
 
@@ -1100,13 +1102,17 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		rtr->rtindex = nsitem->p_rtindex;
 		return (Node *) rtr;
 	}
-	else if (IsA(n, RangeTableFunc))
+	else if (IsA(n, RangeTableFunc) || IsA(n, JsonTable))
 	{
 		/* table function is like a plain relation */
 		RangeTblRef *rtr;
 		ParseNamespaceItem *nsitem;
 
-		nsitem = transformRangeTableFunc(pstate, (RangeTableFunc *) n);
+		if (IsA(n, RangeTableFunc))
+			nsitem = transformRangeTableFunc(pstate, (RangeTableFunc *) n);
+		else
+			nsitem = transformJsonTable(pstate, (JsonTable *) n);
+
 		*top_nsitem = nsitem;
 		*namespace = list_make1(nsitem);
 		rtr = makeNode(RangeTblRef);
@@ -1437,21 +1443,6 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 			extractRemainingColumns(r_nscolumns, r_colnames, &r_colnos,
 									&res_colnames, &res_colvars,
 									res_nscolumns + res_colindex);
-
-		/*
-		 * Check alias (AS clause), if any.
-		 */
-		if (j->alias)
-		{
-			if (j->alias->colnames != NIL)
-			{
-				if (list_length(j->alias->colnames) > list_length(res_colnames))
-					ereport(ERROR,
-							(errcode(ERRCODE_SYNTAX_ERROR),
-							 errmsg("column alias list for \"%s\" has too many entries",
-									j->alias->aliasname)));
-			}
-		}
 
 		/*
 		 * Now build an RTE and nsitem for the result of the join.
@@ -1998,7 +1989,7 @@ findTargetlistEntrySQL92(ParseState *pstate, Node *node, List **tlist,
 	}
 	if (IsA(node, A_Const))
 	{
-		A_Const	   *aconst = castNode(A_Const, node);
+		A_Const    *aconst = castNode(A_Const, node);
 		int			targetlist_pos = 0;
 		int			target_pos;
 
@@ -2840,6 +2831,7 @@ transformWindowDefinitions(ParseState *pstate,
 											 rangeopfamily, rangeopcintype,
 											 &wc->endInRangeFunc,
 											 windef->endOffset);
+		wc->runCondition = NIL;
 		wc->winref = winref;
 
 		result = lappend(result, wc);

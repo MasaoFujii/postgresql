@@ -43,7 +43,7 @@ static void bbsink_server_begin_manifest(bbsink *sink);
 static void bbsink_server_manifest_contents(bbsink *sink, size_t len);
 static void bbsink_server_end_manifest(bbsink *sink);
 
-const bbsink_ops bbsink_server_ops = {
+static const bbsink_ops bbsink_server_ops = {
 	.begin_backup = bbsink_forward_begin_backup,
 	.begin_archive = bbsink_server_begin_archive,
 	.archive_contents = bbsink_server_archive_contents,
@@ -69,18 +69,19 @@ bbsink_server_new(bbsink *next, char *pathname)
 
 	/* Replication permission is not sufficient in this case. */
 	StartTransactionCommand();
-	if (!is_member_of_role(GetUserId(), ROLE_PG_WRITE_SERVER_FILES))
+	if (!has_privs_of_role(GetUserId(), ROLE_PG_WRITE_SERVER_FILES))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be superuser or a member of the pg_write_server_files role to create server backup")));
+				 errmsg("must be superuser or a role with privileges of the pg_write_server_files role to create server backup")));
 	CommitTransactionCommand();
 
 	/*
 	 * It's not a good idea to store your backups in the same directory that
-	 * you're backing up. If we allowed a relative path here, that could easily
-	 * happen accidentally, so we don't. The user could still accomplish the
-	 * same thing by including the absolute path to $PGDATA in the pathname,
-	 * but that's likely an intentional bad decision rather than an accident.
+	 * you're backing up. If we allowed a relative path here, that could
+	 * easily happen accidentally, so we don't. The user could still
+	 * accomplish the same thing by including the absolute path to $PGDATA in
+	 * the pathname, but that's likely an intentional bad decision rather than
+	 * an accident.
 	 */
 	if (!is_absolute_path(pathname))
 		ereport(ERROR,
@@ -90,14 +91,15 @@ bbsink_server_new(bbsink *next, char *pathname)
 	switch (pg_check_dir(pathname))
 	{
 		case 0:
+
 			/*
-			 * Does not exist, so create it using the same permissions we'd use
-			 * for a new subdirectory of the data directory itself.
+			 * Does not exist, so create it using the same permissions we'd
+			 * use for a new subdirectory of the data directory itself.
 			 */
 			if (MakePGDirectory(pathname) < 0)
 				ereport(ERROR,
-						 (errcode_for_file_access(),
-						  errmsg("could not create directory \"%s\": %m", pathname)));
+						(errcode_for_file_access(),
+						 errmsg("could not create directory \"%s\": %m", pathname)));
 			break;
 
 		case 1:
@@ -195,9 +197,9 @@ bbsink_server_end_archive(bbsink *sink)
 
 	/*
 	 * We intentionally don't use data_sync_elevel here, because the server
-	 * shouldn't PANIC just because we can't guarantee the the backup has been
-	 * written down to disk. Running recovery won't fix anything in this case
-	 * anyway.
+	 * shouldn't PANIC just because we can't guarantee that the backup has
+	 * been written down to disk. Running recovery won't fix anything in this
+	 * case anyway.
 	 */
 	if (FileSync(mysink->file, WAIT_EVENT_BASEBACKUP_SYNC) < 0)
 		ereport(ERROR,

@@ -166,8 +166,8 @@ MemoizeHash_hash(struct memoize_hash *tb, const MemoizeKey *key)
 	{
 		for (int i = 0; i < numkeys; i++)
 		{
-			/* rotate hashkey left 1 bit at each step */
-			hashkey = (hashkey << 1) | ((hashkey & 0x80000000) ? 1 : 0);
+			/* combine successive hashkeys by rotating */
+			hashkey = pg_rotate_left32(hashkey, 1);
 
 			if (!pslot->tts_isnull[i])	/* treat nulls as having hash key 0 */
 			{
@@ -189,8 +189,8 @@ MemoizeHash_hash(struct memoize_hash *tb, const MemoizeKey *key)
 
 		for (int i = 0; i < numkeys; i++)
 		{
-			/* rotate hashkey left 1 bit at each step */
-			hashkey = (hashkey << 1) | ((hashkey & 0x80000000) ? 1 : 0);
+			/* combine successive hashkeys by rotating */
+			hashkey = pg_rotate_left32(hashkey, 1);
 
 			if (!pslot->tts_isnull[i])	/* treat nulls as having hash key 0 */
 			{
@@ -375,7 +375,7 @@ static void
 cache_purge_all(MemoizeState *mstate)
 {
 	uint64		evictions = mstate->hashtable->members;
-	PlanState *pstate = (PlanState *) mstate;
+	PlanState  *pstate = (PlanState *) mstate;
 
 	/*
 	 * Likely the most efficient way to remove all items is to just reset the
@@ -446,9 +446,13 @@ cache_reduce_memory(MemoizeState *mstate, MemoizeKey *specialkey)
 		 */
 		entry = memoize_lookup(mstate->hashtable, NULL);
 
-		/* A good spot to check for corruption of the table and LRU list. */
-		Assert(entry != NULL);
-		Assert(entry->key == key);
+		/*
+		 * Sanity check that we found the entry belonging to the LRU list
+		 * item.  A misbehaving hash or equality function could cause the
+		 * entry not to be found or the wrong entry to be found.
+		 */
+		if (unlikely(entry == NULL || entry->key != key))
+			elog(ERROR, "could not find memoization table entry");
 
 		/*
 		 * If we're being called to free memory while the cache is being

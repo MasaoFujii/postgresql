@@ -3368,11 +3368,28 @@ double
 estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 					List **pgset, EstimationInfo *estinfo)
 {
-	List	   *varinfos = NIL;
+	return estimate_num_groups_incremental(root, groupExprs,
+										   input_rows, pgset, estinfo,
+										   NULL, 0);
+}
+
+/*
+ * estimate_num_groups_incremental
+ *		An estimate_num_groups variant, optimized for cases that are adding the
+ *		expressions incrementally (e.g. one by one).
+ */
+double
+estimate_num_groups_incremental(PlannerInfo *root, List *groupExprs,
+								double input_rows,
+								List **pgset, EstimationInfo *estinfo,
+								List **cache_varinfos, int prevNExprs)
+{
+	List	   *varinfos = (cache_varinfos) ? *cache_varinfos : NIL;
 	double		srf_multiplier = 1.0;
 	double		numdistinct;
 	ListCell   *l;
-	int			i;
+	int			i,
+				j;
 
 	/* Zero the estinfo output parameter, if non-NULL */
 	if (estinfo != NULL)
@@ -3403,7 +3420,7 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 	 */
 	numdistinct = 1.0;
 
-	i = 0;
+	i = j = 0;
 	foreach(l, groupExprs)
 	{
 		Node	   *groupexpr = (Node *) lfirst(l);
@@ -3411,6 +3428,14 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 		VariableStatData vardata;
 		List	   *varshere;
 		ListCell   *l2;
+
+		/* was done on previous call */
+		if (cache_varinfos && j++ < prevNExprs)
+		{
+			if (pgset)
+				i++;			/* to keep in sync with lines below */
+			continue;
+		}
 
 		/* is expression in this grouping set? */
 		if (pgset && !list_member_int(*pgset, i++))
@@ -3481,7 +3506,11 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 		if (varshere == NIL)
 		{
 			if (contain_volatile_functions(groupexpr))
+			{
+				if (cache_varinfos)
+					*cache_varinfos = varinfos;
 				return input_rows;
+			}
 			continue;
 		}
 
@@ -3497,6 +3526,9 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 			ReleaseVariableStats(vardata);
 		}
 	}
+
+	if (cache_varinfos)
+		*cache_varinfos = varinfos;
 
 	/*
 	 * If now no Vars, we must have an all-constant or all-boolean GROUP BY
@@ -3596,7 +3628,6 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 					 */
 					if (estinfo != NULL && varinfo2->isdefault)
 						estinfo->flags |= SELFLAG_USED_DEFAULT;
-
 				}
 
 				/* we're done with this relation */
@@ -3913,7 +3944,7 @@ estimate_multivariate_ndistinct(PlannerInfo *root, RelOptInfo *rel,
 	Oid			statOid = InvalidOid;
 	MVNDistinct *stats;
 	StatisticExtInfo *matched_info = NULL;
-	RangeTblEntry		*rte;
+	RangeTblEntry *rte;
 
 	/* bail out immediately if the table has no extended statistics */
 	if (!rel->statlist)
@@ -5224,7 +5255,7 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 		foreach(slist, onerel->statlist)
 		{
 			StatisticExtInfo *info = (StatisticExtInfo *) lfirst(slist);
-			RangeTblEntry	 *rte = planner_rt_fetch(onerel->relid, root);
+			RangeTblEntry *rte = planner_rt_fetch(onerel->relid, root);
 			ListCell   *expr_item;
 			int			pos;
 

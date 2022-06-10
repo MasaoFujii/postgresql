@@ -35,7 +35,6 @@ use strict;
 use warnings;
 
 use Carp;
-use Config;
 use Exporter 'import';
 use File::Copy;
 use File::Path qw(rmtree);
@@ -102,22 +101,10 @@ sub check_query
 	  ],
 	  '>', \$stdout, '2>', \$stderr;
 
-	# We don't use ok() for the exit code and stderr, because we want this
-	# check to be just a single test.
-	if (!$result)
-	{
-		fail("$test_name: psql exit code");
-	}
-	elsif ($stderr ne '')
-	{
-		diag $stderr;
-		fail("$test_name: psql no stderr");
-	}
-	else
-	{
-		$stdout =~ s/\r\n/\n/g if $Config{osname} eq 'msys';
-		is($stdout, $expected_stdout, "$test_name: query result matches");
-	}
+	is($result, 1,                "$test_name: psql exit code");
+	is($stderr, '',               "$test_name: psql no stderr");
+	is($stdout, $expected_stdout, "$test_name: query result matches");
+
 	return;
 }
 
@@ -128,7 +115,8 @@ sub setup_cluster
 
 	# Initialize primary, data checksums are mandatory
 	$node_primary =
-	  PostgreSQL::Test::Cluster->new('primary' . ($extra_name ? "_${extra_name}" : ''));
+	  PostgreSQL::Test::Cluster->new(
+		'primary' . ($extra_name ? "_${extra_name}" : ''));
 
 	# Set up pg_hba.conf and pg_ident.conf for the role running
 	# pg_rewind.  This role is used for all the tests, and has
@@ -176,7 +164,8 @@ sub create_standby
 	my $extra_name = shift;
 
 	$node_standby =
-	  PostgreSQL::Test::Cluster->new('standby' . ($extra_name ? "_${extra_name}" : ''));
+	  PostgreSQL::Test::Cluster->new(
+		'standby' . ($extra_name ? "_${extra_name}" : ''));
 	$node_primary->backup('my_backup');
 	$node_standby->init_from_backup($node_primary, 'my_backup');
 	my $connstr_primary = $node_primary->connstr();
@@ -276,7 +265,9 @@ sub run_pg_rewind
 				"--debug",
 				"--source-pgdata=$standby_pgdata",
 				"--target-pgdata=$primary_pgdata",
-				"--no-sync"
+				"--no-sync",
+				"--config-file",
+				"$tmp_folder/primary-postgresql.conf.tmp"
 			],
 			'pg_rewind local');
 	}
@@ -289,7 +280,8 @@ sub run_pg_rewind
 				'pg_rewind',                       "--debug",
 				"--source-server",                 $standby_connstr,
 				"--target-pgdata=$primary_pgdata", "--no-sync",
-				"--write-recovery-conf"
+				"--write-recovery-conf",           "--config-file",
+				"$tmp_folder/primary-postgresql.conf.tmp"
 			],
 			'pg_rewind remote');
 
@@ -315,7 +307,8 @@ sub run_pg_rewind
 		# segments from the old primary to the archives.  These
 		# will be used by pg_rewind.
 		rmtree($node_primary->archive_dir);
-		PostgreSQL::Test::RecursiveCopy::copypath($node_primary->data_dir . "/pg_wal",
+		PostgreSQL::Test::RecursiveCopy::copypath(
+			$node_primary->data_dir . "/pg_wal",
 			$node_primary->archive_dir);
 
 		# Fast way to remove entire directory content
@@ -336,7 +329,8 @@ sub run_pg_rewind
 
 		# Note the use of --no-ensure-shutdown here.  WAL files are
 		# gone in this mode and the primary has been stopped
-		# gracefully already.
+		# gracefully already.  --config-file reuses the original
+		# postgresql.conf as restore_command has been enabled above.
 		command_ok(
 			[
 				'pg_rewind',
@@ -345,7 +339,9 @@ sub run_pg_rewind
 				"--target-pgdata=$primary_pgdata",
 				"--no-sync",
 				"--no-ensure-shutdown",
-				"--restore-target-wal"
+				"--restore-target-wal",
+				"--config-file",
+				"$primary_pgdata/postgresql.conf"
 			],
 			'pg_rewind archive');
 	}

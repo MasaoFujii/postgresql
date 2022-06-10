@@ -28,7 +28,7 @@ typedef struct bbstreamer_gzip_writer
 	bbstreamer	base;
 	char	   *pathname;
 	gzFile		gzfile;
-}			bbstreamer_gzip_writer;
+} bbstreamer_gzip_writer;
 
 typedef struct bbstreamer_gzip_decompressor
 {
@@ -52,9 +52,9 @@ const bbstreamer_ops bbstreamer_gzip_writer_ops = {
 };
 
 static void bbstreamer_gzip_decompressor_content(bbstreamer *streamer,
-											  bbstreamer_member *member,
-											  const char *data, int len,
-											  bbstreamer_archive_context context);
+												 bbstreamer_member *member,
+												 const char *data, int len,
+												 bbstreamer_archive_context context);
 static void bbstreamer_gzip_decompressor_finalize(bbstreamer *streamer);
 static void bbstreamer_gzip_decompressor_free(bbstreamer *streamer);
 static void *gzip_palloc(void *opaque, unsigned items, unsigned size);
@@ -76,7 +76,8 @@ const bbstreamer_ops bbstreamer_gzip_decompressor_ops = {
  * closed so that the data may be written there.
  */
 bbstreamer *
-bbstreamer_gzip_writer_new(char *pathname, FILE *file, int compresslevel)
+bbstreamer_gzip_writer_new(char *pathname, FILE *file,
+						   pg_compress_specification *compress)
 {
 #ifdef HAVE_LIBZ
 	bbstreamer_gzip_writer *streamer;
@@ -91,42 +92,31 @@ bbstreamer_gzip_writer_new(char *pathname, FILE *file, int compresslevel)
 	{
 		streamer->gzfile = gzopen(pathname, "wb");
 		if (streamer->gzfile == NULL)
-		{
-			pg_log_error("could not create compressed file \"%s\": %m",
-						 pathname);
-			exit(1);
-		}
+			pg_fatal("could not create compressed file \"%s\": %m",
+					 pathname);
 	}
 	else
 	{
 		int			fd = dup(fileno(file));
 
 		if (fd < 0)
-		{
-			pg_log_error("could not duplicate stdout: %m");
-			exit(1);
-		}
+			pg_fatal("could not duplicate stdout: %m");
 
 		streamer->gzfile = gzdopen(fd, "wb");
 		if (streamer->gzfile == NULL)
-		{
-			pg_log_error("could not open output file: %m");
-			exit(1);
-		}
+			pg_fatal("could not open output file: %m");
 	}
 
-	if (gzsetparams(streamer->gzfile, compresslevel,
+	if ((compress->options & PG_COMPRESSION_OPTION_LEVEL) != 0 &&
+		gzsetparams(streamer->gzfile, compress->level,
 					Z_DEFAULT_STRATEGY) != Z_OK)
-	{
-		pg_log_error("could not set compression level %d: %s",
-					 compresslevel, get_gz_error(streamer->gzfile));
-		exit(1);
-	}
+		pg_fatal("could not set compression level %d: %s",
+				 compress->level, get_gz_error(streamer->gzfile));
 
 	return &streamer->base;
 #else
-	pg_log_error("this build does not support compression");
-	exit(1);
+	pg_fatal("this build does not support gzip compression");
+	return NULL;				/* keep compiler quiet */
 #endif
 }
 
@@ -152,9 +142,8 @@ bbstreamer_gzip_writer_content(bbstreamer *streamer,
 		/* if write didn't set errno, assume problem is no disk space */
 		if (errno == 0)
 			errno = ENOSPC;
-		pg_log_error("could not write to compressed file \"%s\": %s",
-					 mystreamer->pathname, get_gz_error(mystreamer->gzfile));
-		exit(1);
+		pg_fatal("could not write to compressed file \"%s\": %s",
+				 mystreamer->pathname, get_gz_error(mystreamer->gzfile));
 	}
 }
 
@@ -177,11 +166,8 @@ bbstreamer_gzip_writer_finalize(bbstreamer *streamer)
 
 	errno = 0;					/* in case gzclose() doesn't set it */
 	if (gzclose(mystreamer->gzfile) != 0)
-	{
-		pg_log_error("could not close compressed file \"%s\": %m",
-					 mystreamer->pathname);
-		exit(1);
-	}
+		pg_fatal("could not close compressed file \"%s\": %m",
+				 mystreamer->pathname);
 
 	mystreamer->gzfile = NULL;
 }
@@ -228,8 +214,8 @@ bbstreamer *
 bbstreamer_gzip_decompressor_new(bbstreamer *next)
 {
 #ifdef HAVE_LIBZ
-	bbstreamer_gzip_decompressor	*streamer;
-	z_stream *zs;
+	bbstreamer_gzip_decompressor *streamer;
+	z_stream   *zs;
 
 	Assert(next != NULL);
 
@@ -258,15 +244,12 @@ bbstreamer_gzip_decompressor_new(bbstreamer *next)
 	 * possible value for safety.
 	 */
 	if (inflateInit2(zs, 15 + 16) != Z_OK)
-	{
-		pg_log_error("could not initialize compression library");
-		exit(1);
-	}
+		pg_fatal("could not initialize compression library");
 
 	return &streamer->base;
 #else
-	pg_log_error("this build does not support compression");
-	exit(1);
+	pg_fatal("this build does not support gzip compression");
+	return NULL;				/* keep compiler quiet */
 #endif
 }
 
@@ -278,12 +261,12 @@ bbstreamer_gzip_decompressor_new(bbstreamer *next)
  */
 static void
 bbstreamer_gzip_decompressor_content(bbstreamer *streamer,
-								  bbstreamer_member *member,
-								  const char *data, int len,
-								  bbstreamer_archive_context context)
+									 bbstreamer_member *member,
+									 const char *data, int len,
+									 bbstreamer_archive_context context)
 {
 	bbstreamer_gzip_decompressor *mystreamer;
-	z_stream *zs;
+	z_stream   *zs;
 
 	mystreamer = (bbstreamer_gzip_decompressor *) streamer;
 
@@ -294,7 +277,7 @@ bbstreamer_gzip_decompressor_content(bbstreamer *streamer,
 	/* Process the current chunk */
 	while (zs->avail_in > 0)
 	{
-		int res;
+		int			res;
 
 		Assert(mystreamer->bytes_written < mystreamer->base.bbs_buffer.maxlen);
 
@@ -305,8 +288,9 @@ bbstreamer_gzip_decompressor_content(bbstreamer *streamer,
 
 		/*
 		 * This call decompresses data starting at zs->next_in and updates
-		 * zs->next_in * and zs->avail_in. It generates output data starting at
-		 * zs->next_out and updates zs->next_out and zs->avail_out accordingly.
+		 * zs->next_in * and zs->avail_in. It generates output data starting
+		 * at zs->next_out and updates zs->next_out and zs->avail_out
+		 * accordingly.
 		 */
 		res = inflate(zs, Z_NO_FLUSH);
 

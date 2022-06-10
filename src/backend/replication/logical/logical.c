@@ -73,10 +73,6 @@ static void truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 static void message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 							   XLogRecPtr message_lsn, bool transactional,
 							   const char *prefix, Size message_size, const char *message);
-static void sequence_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
-								XLogRecPtr sequence_lsn, Relation rel,
-								bool transactional,
-								int64 last_value, int64 log_cnt, bool is_called);
 
 /* streaming callbacks */
 static void stream_start_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
@@ -94,10 +90,6 @@ static void stream_change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn
 static void stream_message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 									  XLogRecPtr message_lsn, bool transactional,
 									  const char *prefix, Size message_size, const char *message);
-static void stream_sequence_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
-									   XLogRecPtr sequence_lsn, Relation rel,
-									   bool transactional,
-									   int64 last_value, int64 log_cnt, bool is_called);
 static void stream_truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 									   int nrelations, Relation relations[], ReorderBufferChange *change);
 
@@ -226,7 +218,6 @@ StartupDecodingContext(List *output_plugin_options,
 	ctx->reorder->apply_truncate = truncate_cb_wrapper;
 	ctx->reorder->commit = commit_cb_wrapper;
 	ctx->reorder->message = message_cb_wrapper;
-	ctx->reorder->sequence = sequence_cb_wrapper;
 
 	/*
 	 * To support streaming, we require start/stop/abort/commit/change
@@ -243,7 +234,6 @@ StartupDecodingContext(List *output_plugin_options,
 		(ctx->callbacks.stream_commit_cb != NULL) ||
 		(ctx->callbacks.stream_change_cb != NULL) ||
 		(ctx->callbacks.stream_message_cb != NULL) ||
-		(ctx->callbacks.stream_sequence_cb != NULL) ||
 		(ctx->callbacks.stream_truncate_cb != NULL);
 
 	/*
@@ -261,7 +251,6 @@ StartupDecodingContext(List *output_plugin_options,
 	ctx->reorder->stream_commit = stream_commit_cb_wrapper;
 	ctx->reorder->stream_change = stream_change_cb_wrapper;
 	ctx->reorder->stream_message = stream_message_cb_wrapper;
-	ctx->reorder->stream_sequence = stream_sequence_cb_wrapper;
 	ctx->reorder->stream_truncate = stream_truncate_cb_wrapper;
 
 
@@ -683,12 +672,14 @@ OutputPluginWrite(struct LogicalDecodingContext *ctx, bool last_write)
  * Update progress tracking (if supported).
  */
 void
-OutputPluginUpdateProgress(struct LogicalDecodingContext *ctx)
+OutputPluginUpdateProgress(struct LogicalDecodingContext *ctx,
+						   bool skipped_xact)
 {
 	if (!ctx->update_progress)
 		return;
 
-	ctx->update_progress(ctx, ctx->write_location, ctx->write_xid);
+	ctx->update_progress(ctx, ctx->write_location, ctx->write_xid,
+						 skipped_xact);
 }
 
 /*
@@ -755,6 +746,7 @@ startup_cb_wrapper(LogicalDecodingContext *ctx, OutputPluginOptions *opt, bool i
 
 	/* set output state */
 	ctx->accept_writes = false;
+	ctx->end_xact = false;
 
 	/* do the actual work: call callback */
 	ctx->callbacks.startup_cb(ctx, opt, is_init);
@@ -782,6 +774,7 @@ shutdown_cb_wrapper(LogicalDecodingContext *ctx)
 
 	/* set output state */
 	ctx->accept_writes = false;
+	ctx->end_xact = false;
 
 	/* do the actual work: call callback */
 	ctx->callbacks.shutdown_cb(ctx);
@@ -817,6 +810,7 @@ begin_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn)
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->first_lsn;
+	ctx->end_xact = false;
 
 	/* do the actual work: call callback */
 	ctx->callbacks.begin_cb(ctx, txn);
@@ -848,6 +842,7 @@ commit_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->end_lsn; /* points to the end of the record */
+	ctx->end_xact = true;
 
 	/* do the actual work: call callback */
 	ctx->callbacks.commit_cb(ctx, txn, commit_lsn);
@@ -888,6 +883,7 @@ begin_prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn)
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->first_lsn;
+	ctx->end_xact = false;
 
 	/*
 	 * If the plugin supports two-phase commits then begin prepare callback is
@@ -932,6 +928,7 @@ prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->end_lsn; /* points to the end of the record */
+	ctx->end_xact = true;
 
 	/*
 	 * If the plugin supports two-phase commits then prepare callback is
@@ -976,6 +973,7 @@ commit_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->end_lsn; /* points to the end of the record */
+	ctx->end_xact = true;
 
 	/*
 	 * If the plugin support two-phase commits then commit prepared callback
@@ -1021,6 +1019,7 @@ rollback_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->end_lsn; /* points to the end of the record */
+	ctx->end_xact = true;
 
 	/*
 	 * If the plugin support two-phase commits then rollback prepared callback
@@ -1071,6 +1070,8 @@ change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	 */
 	ctx->write_location = change->lsn;
 
+	ctx->end_xact = false;
+
 	ctx->callbacks.change_cb(ctx, txn, relation, change);
 
 	/* Pop the error context stack */
@@ -1111,6 +1112,8 @@ truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	 */
 	ctx->write_location = change->lsn;
 
+	ctx->end_xact = false;
+
 	ctx->callbacks.truncate_cb(ctx, txn, nrelations, relations, change);
 
 	/* Pop the error context stack */
@@ -1138,6 +1141,7 @@ filter_prepare_cb_wrapper(LogicalDecodingContext *ctx, TransactionId xid,
 
 	/* set output state */
 	ctx->accept_writes = false;
+	ctx->end_xact = false;
 
 	/* do the actual work: call callback */
 	ret = ctx->callbacks.filter_prepare_cb(ctx, xid, gid);
@@ -1168,6 +1172,7 @@ filter_by_origin_cb_wrapper(LogicalDecodingContext *ctx, RepOriginId origin_id)
 
 	/* set output state */
 	ctx->accept_writes = false;
+	ctx->end_xact = false;
 
 	/* do the actual work: call callback */
 	ret = ctx->callbacks.filter_by_origin_cb(ctx, origin_id);
@@ -1205,46 +1210,11 @@ message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn != NULL ? txn->xid : InvalidTransactionId;
 	ctx->write_location = message_lsn;
+	ctx->end_xact = false;
 
 	/* do the actual work: call callback */
 	ctx->callbacks.message_cb(ctx, txn, message_lsn, transactional, prefix,
 							  message_size, message);
-
-	/* Pop the error context stack */
-	error_context_stack = errcallback.previous;
-}
-
-static void
-sequence_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
-					XLogRecPtr sequence_lsn, Relation rel, bool transactional,
-					int64 last_value, int64 log_cnt, bool is_called)
-{
-	LogicalDecodingContext *ctx = cache->private_data;
-	LogicalErrorCallbackState state;
-	ErrorContextCallback errcallback;
-
-	Assert(!ctx->fast_forward);
-
-	if (ctx->callbacks.sequence_cb == NULL)
-		return;
-
-	/* Push callback + info on the error context stack */
-	state.ctx = ctx;
-	state.callback_name = "sequence";
-	state.report_location = sequence_lsn;
-	errcallback.callback = output_plugin_error_callback;
-	errcallback.arg = (void *) &state;
-	errcallback.previous = error_context_stack;
-	error_context_stack = &errcallback;
-
-	/* set output state */
-	ctx->accept_writes = true;
-	ctx->write_xid = txn != NULL ? txn->xid : InvalidTransactionId;
-	ctx->write_location = sequence_lsn;
-
-	/* do the actual work: call callback */
-	ctx->callbacks.sequence_cb(ctx, txn, sequence_lsn, rel, transactional,
-							   last_value, log_cnt, is_called);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
@@ -1283,6 +1253,8 @@ stream_start_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	 * transaction's commit to be confirmed with one message.
 	 */
 	ctx->write_location = first_lsn;
+
+	ctx->end_xact = false;
 
 	/* in streaming mode, stream_start_cb is required */
 	if (ctx->callbacks.stream_start_cb == NULL)
@@ -1331,6 +1303,8 @@ stream_stop_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	 */
 	ctx->write_location = last_lsn;
 
+	ctx->end_xact = false;
+
 	/* in streaming mode, stream_stop_cb is required */
 	if (ctx->callbacks.stream_stop_cb == NULL)
 		ereport(ERROR,
@@ -1370,6 +1344,7 @@ stream_abort_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = abort_lsn;
+	ctx->end_xact = true;
 
 	/* in streaming mode, stream_abort_cb is required */
 	if (ctx->callbacks.stream_abort_cb == NULL)
@@ -1414,6 +1389,7 @@ stream_prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->end_lsn;
+	ctx->end_xact = true;
 
 	/* in streaming mode with two-phase commits, stream_prepare_cb is required */
 	if (ctx->callbacks.stream_prepare_cb == NULL)
@@ -1454,6 +1430,7 @@ stream_commit_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn->xid;
 	ctx->write_location = txn->end_lsn;
+	ctx->end_xact = true;
 
 	/* in streaming mode, stream_commit_cb is required */
 	if (ctx->callbacks.stream_commit_cb == NULL)
@@ -1502,6 +1479,8 @@ stream_change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	 */
 	ctx->write_location = change->lsn;
 
+	ctx->end_xact = false;
+
 	/* in streaming mode, stream_change_cb is required */
 	if (ctx->callbacks.stream_change_cb == NULL)
 		ereport(ERROR,
@@ -1546,51 +1525,11 @@ stream_message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	ctx->accept_writes = true;
 	ctx->write_xid = txn != NULL ? txn->xid : InvalidTransactionId;
 	ctx->write_location = message_lsn;
+	ctx->end_xact = false;
 
 	/* do the actual work: call callback */
 	ctx->callbacks.stream_message_cb(ctx, txn, message_lsn, transactional, prefix,
 									 message_size, message);
-
-	/* Pop the error context stack */
-	error_context_stack = errcallback.previous;
-}
-
-static void
-stream_sequence_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
-						   XLogRecPtr sequence_lsn, Relation rel,
-						   bool transactional,
-						   int64 last_value, int64 log_cnt, bool is_called)
-{
-	LogicalDecodingContext *ctx = cache->private_data;
-	LogicalErrorCallbackState state;
-	ErrorContextCallback errcallback;
-
-	Assert(!ctx->fast_forward);
-
-	/* We're only supposed to call this when streaming is supported. */
-	Assert(ctx->streaming);
-
-	/* this callback is optional */
-	if (ctx->callbacks.stream_sequence_cb == NULL)
-		return;
-
-	/* Push callback + info on the error context stack */
-	state.ctx = ctx;
-	state.callback_name = "stream_sequence";
-	state.report_location = sequence_lsn;
-	errcallback.callback = output_plugin_error_callback;
-	errcallback.arg = (void *) &state;
-	errcallback.previous = error_context_stack;
-	error_context_stack = &errcallback;
-
-	/* set output state */
-	ctx->accept_writes = true;
-	ctx->write_xid = txn != NULL ? txn->xid : InvalidTransactionId;
-	ctx->write_location = sequence_lsn;
-
-	/* do the actual work: call callback */
-	ctx->callbacks.sequence_cb(ctx, txn, sequence_lsn, rel, transactional,
-							   last_value, log_cnt, is_called);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
@@ -1634,6 +1573,8 @@ stream_truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	 * commit to be confirmed with one message.
 	 */
 	ctx->write_location = change->lsn;
+
+	ctx->end_xact = false;
 
 	ctx->callbacks.stream_truncate_cb(ctx, txn, nrelations, relations, change);
 
@@ -1909,7 +1850,6 @@ UpdateDecodingStats(LogicalDecodingContext *ctx)
 		 (long long) rb->totalTxns,
 		 (long long) rb->totalBytes);
 
-	namestrcpy(&repSlotStat.slotname, NameStr(ctx->slot->data.name));
 	repSlotStat.spill_txns = rb->spillTxns;
 	repSlotStat.spill_count = rb->spillCount;
 	repSlotStat.spill_bytes = rb->spillBytes;
@@ -1919,7 +1859,7 @@ UpdateDecodingStats(LogicalDecodingContext *ctx)
 	repSlotStat.total_txns = rb->totalTxns;
 	repSlotStat.total_bytes = rb->totalBytes;
 
-	pgstat_report_replslot(&repSlotStat);
+	pgstat_report_replslot(ctx->slot, &repSlotStat);
 
 	rb->spillTxns = 0;
 	rb->spillCount = 0;

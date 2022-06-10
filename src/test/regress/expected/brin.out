@@ -484,7 +484,7 @@ ERROR:  block number out of range: -1
 SELECT brin_summarize_range('brin_summarize_idx', 4294967296);
 ERROR:  block number out of range: 4294967296
 -- test value merging in add_value
-CREATE TABLE brintest_2 (n numrange);
+CREATE UNLOGGED TABLE brintest_2 (n numrange);
 CREATE INDEX brinidx_2 ON brintest_2 USING brin (n);
 INSERT INTO brintest_2 VALUES ('empty');
 INSERT INTO brintest_2 VALUES (numrange(0, 2^1000::numeric));
@@ -603,3 +603,25 @@ SELECT COUNT(*) FROM brin_hot_2 WHERE a = 2 AND b = 100;
      1
 (1 row)
 
+-- test BRIN index doesn't block HOT update
+CREATE TABLE brin_hot (
+        id  integer PRIMARY KEY,
+        val integer NOT NULL
+) WITH (autovacuum_enabled = off, fillfactor = 70);
+INSERT INTO brin_hot SELECT *, 0 FROM generate_series(1, 235);
+CREATE INDEX val_brin ON brin_hot using brin(val);
+UPDATE brin_hot SET val = -3 WHERE id = 42;
+-- ensure pending stats are flushed
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_stat_get_tuples_hot_updated('brin_hot'::regclass::oid);
+ pg_stat_get_tuples_hot_updated 
+--------------------------------
+                              1
+(1 row)
+
+DROP TABLE brin_hot;
