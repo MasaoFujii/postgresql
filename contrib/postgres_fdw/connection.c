@@ -128,7 +128,9 @@ static void pgfdw_finish_pre_subcommit_cleanup(List *pending_entries,
 											   int curlevel);
 static bool UserMappingPasswordRequired(UserMapping *user);
 static bool disconnect_cached_connections(Oid serverid);
-static void pgfdw_prepare_xacts(ConnCacheEntry *entry);
+static void pgfdw_prepare_xacts(ConnCacheEntry *entry,
+								List **pending_entries_prepare);
+static void pgfdw_finish_prepare_cleanup(List *pending_entries_prepare);
 static void pgfdw_commit_prepared(ConnCacheEntry *entry);
 static bool pgfdw_rollback_prepared(ConnCacheEntry *entry);
 static void pgfdw_deallocate_all(ConnCacheEntry *entry);
@@ -956,6 +958,7 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 	List	   *umids = NIL;
 	bool		used_2pc = false;
 	List	   *pending_entries = NIL;
+	List	   *pending_entries_prepare = NIL;
 
 	/* Quick exit if no connections were touched in this transaction. */
 	if (!xact_got_connection)
@@ -995,7 +998,7 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 						(pgfdw_two_phase_commit == PGFDW_2PC_ON &&
 						 entry->modified))
 					{
-						pgfdw_prepare_xacts(entry);
+						pgfdw_prepare_xacts(entry, &pending_entries_prepare);
 						if (pgfdw_track_xact_commits)
 							umids = lappend_oid(umids, (Oid) entry->key);
 						used_2pc = true;
@@ -1085,6 +1088,13 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 		Assert(event == XACT_EVENT_PARALLEL_PRE_COMMIT ||
 			   event == XACT_EVENT_PRE_COMMIT);
 		pgfdw_finish_pre_commit_cleanup(pending_entries);
+	}
+
+	if (pending_entries_prepare)
+	{
+		Assert(event == XACT_EVENT_PARALLEL_PRE_COMMIT ||
+			   event == XACT_EVENT_PRE_COMMIT);
+		pgfdw_finish_prepare_cleanup(pending_entries_prepare);
 	}
 
 	if (used_2pc)
@@ -1947,7 +1957,7 @@ disconnect_cached_connections(Oid serverid)
 			 (*cluster_name == '\0') ? "null" : cluster_name)
 
 static void
-pgfdw_prepare_xacts(ConnCacheEntry *entry)
+pgfdw_prepare_xacts(ConnCacheEntry *entry, List **pending_entries_prepare)
 {
 	char		sql[256];
 
@@ -1957,8 +1967,40 @@ pgfdw_prepare_xacts(ConnCacheEntry *entry)
 	PreparedXactCommand(sql, "PREPARE TRANSACTION", entry);
 
 	entry->changing_xact_state = true;
+	if (entry->parallel_commit)
+	{
+		do_sql_command_begin(entry->conn, sql);
+		*pending_entries_prepare = lappend(*pending_entries_prepare, entry);
+		return;
+	}
+
 	do_sql_command(entry->conn, sql);
 	entry->changing_xact_state = false;
+}
+
+static void
+pgfdw_finish_prepare_cleanup(List *pending_entries_prepare)
+{
+	ConnCacheEntry *entry;
+	char		sql[256];
+	ListCell   *lc;
+
+	Assert(pending_entries_prepare);
+
+	foreach(lc, pending_entries_prepare)
+	{
+		entry = (ConnCacheEntry *) lfirst(lc);
+
+		Assert(entry->changing_xact_state);
+
+		/*
+		 * We might already have received the result on the socket, so pass
+		 * consume_input=true to try to consume it first
+		 */
+		PreparedXactCommand(sql, "PREPARE TRANSACTION", entry);
+		do_sql_command_end(entry->conn, sql, true);
+		entry->changing_xact_state = false;
+	}
 }
 
 static void
