@@ -73,6 +73,8 @@ typedef struct ConnCacheEntry
 	Oid			serverid;		/* foreign server OID used to get server name */
 	bool		modified;		/* true if foreign table on foriegn server was
 								 * modified */
+	TimestampTz	endtime;	/* timestamp when to assume the connection
+							 * is dead */
 	uint32		server_hashvalue;	/* hash value of foreign server OID */
 	uint32		mapping_hashvalue;	/* hash value of user mapping OID */
 	PgFdwConnState state;		/* extra per-connection state */
@@ -116,8 +118,13 @@ static void pgfdw_inval_callback(Datum arg, int cacheid, uint32 hashvalue);
 static void pgfdw_reject_incomplete_xact_state_change(ConnCacheEntry *entry);
 static void pgfdw_reset_xact_state(ConnCacheEntry *entry, bool toplevel);
 static bool pgfdw_cancel_query(PGconn *conn);
-static bool pgfdw_exec_cleanup_query(PGconn *conn, const char *query,
+static bool pgfdw_exec_cleanup_query(ConnCacheEntry *entry, const char *query,
 									 bool ignore_errors);
+static bool pgfdw_exec_cleanup_query_begin(ConnCacheEntry *entry,
+										   const char *query);
+static bool pgfdw_exec_cleanup_query_end(ConnCacheEntry *entry,
+										 const char *query,
+										 bool ignore_errors);
 static bool pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime,
 									 PGresult **result, bool *timed_out);
 static void pgfdw_abort_cleanup(ConnCacheEntry *entry, bool toplevel);
@@ -131,7 +138,10 @@ static bool disconnect_cached_connections(Oid serverid);
 static void pgfdw_prepare_xacts(ConnCacheEntry *entry,
 								List **pending_entries_prepare);
 static void pgfdw_finish_prepare_cleanup(List *pending_entries_prepare);
-static void pgfdw_commit_prepared(ConnCacheEntry *entry);
+static void pgfdw_commit_prepared(ConnCacheEntry *entry,
+								  List **pending_entries_commit_prepared);
+static void pgfdw_finish_commit_prepared_cleanup(
+	List *pending_entries_commit_prepared);
 static bool pgfdw_rollback_prepared(ConnCacheEntry *entry);
 static void pgfdw_deallocate_all(ConnCacheEntry *entry);
 static void pgfdw_insert_xact_commits(List *umids);
@@ -959,6 +969,7 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 	bool		used_2pc = false;
 	List	   *pending_entries = NIL;
 	List	   *pending_entries_prepare = NIL;
+	List	   *pending_entries_commit_prepared = NIL;
 
 	/* Quick exit if no connections were touched in this transaction. */
 	if (!xact_got_connection)
@@ -1057,7 +1068,8 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 				case XACT_EVENT_PARALLEL_COMMIT:
 				case XACT_EVENT_COMMIT:
 
-					pgfdw_commit_prepared(entry);
+					pgfdw_commit_prepared(entry,
+										  &pending_entries_commit_prepared);
 					break;
 				case XACT_EVENT_PREPARE:
 					/* Pre-commit should have closed the open transaction */
@@ -1095,6 +1107,13 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 		Assert(event == XACT_EVENT_PARALLEL_PRE_COMMIT ||
 			   event == XACT_EVENT_PRE_COMMIT);
 		pgfdw_finish_prepare_cleanup(pending_entries_prepare);
+	}
+
+	if (pending_entries_commit_prepared)
+	{
+		Assert(event == XACT_EVENT_PARALLEL_COMMIT ||
+			   event == XACT_EVENT_COMMIT);
+		pgfdw_finish_commit_prepared_cleanup(pending_entries_commit_prepared);
 	}
 
 	if (used_2pc)
@@ -1397,39 +1416,57 @@ pgfdw_cancel_query(PGconn *conn)
  * were used.  Try to use WARNING where we can.
  */
 static bool
-pgfdw_exec_cleanup_query(PGconn *conn, const char *query, bool ignore_errors)
+pgfdw_exec_cleanup_query(ConnCacheEntry *entry, const char *query,
+						 bool ignore_errors)
 {
-	PGresult   *result = NULL;
-	TimestampTz endtime;
-	bool		timed_out;
+	if (!pgfdw_exec_cleanup_query_begin(entry, query) ||
+		!pgfdw_exec_cleanup_query_end(entry, query, ignore_errors))
+		return false;
 
+	return true;
+}
+
+static bool
+pgfdw_exec_cleanup_query_begin(ConnCacheEntry *entry, const char *query)
+{
 	/*
 	 * If it takes too long to execute a cleanup query, assume the connection
 	 * is dead.  It's fairly likely that this is why we aborted in the first
 	 * place (e.g. statement timeout, user cancel), so the timeout shouldn't
 	 * be too long.
 	 */
-	endtime = TimestampTzPlusMilliseconds(GetCurrentTimestamp(), 30000);
+	entry->endtime = TimestampTzPlusMilliseconds(GetCurrentTimestamp(), 30000);
 
 	/*
 	 * Submit a query.  Since we don't use non-blocking mode, this also can
 	 * block.  But its risk is relatively small, so we ignore that for now.
 	 */
-	if (!PQsendQuery(conn, query))
+	if (!PQsendQuery(entry->conn, query))
 	{
-		pgfdw_report_error(WARNING, NULL, conn, false, query);
+		pgfdw_report_error(WARNING, NULL, entry->conn, false, query);
 		return false;
 	}
 
+	return true;
+}
+
+static bool
+pgfdw_exec_cleanup_query_end(ConnCacheEntry *entry, const char *query,
+							 bool ignore_errors)
+{
+	PGresult   *result = NULL;
+	bool		timed_out;
+
 	/* Get the result of the query. */
-	if (pgfdw_get_cleanup_result(conn, endtime, &result, &timed_out))
+	if (pgfdw_get_cleanup_result(entry->conn, entry->endtime, &result,
+								 &timed_out))
 	{
 		if (timed_out)
 			ereport(WARNING,
 					(errmsg("could not get query result due to timeout"),
 					 query ? errcontext("remote SQL command: %s", query) : 0));
 		else
-			pgfdw_report_error(WARNING, NULL, conn, false, query);
+			pgfdw_report_error(WARNING, NULL, entry->conn, false, query);
 
 		return false;
 	}
@@ -1437,7 +1474,7 @@ pgfdw_exec_cleanup_query(PGconn *conn, const char *query, bool ignore_errors)
 	/* Issue a warning if not successful. */
 	if (PQresultStatus(result) != PGRES_COMMAND_OK)
 	{
-		pgfdw_report_error(WARNING, result, conn, true, query);
+		pgfdw_report_error(WARNING, result, entry->conn, true, query);
 		return ignore_errors;
 	}
 	PQclear(result);
@@ -1590,13 +1627,13 @@ pgfdw_abort_cleanup_with_sql(ConnCacheEntry *entry, const char *sql,
 		!pgfdw_cancel_query(entry->conn))
 		return;					/* Unable to cancel running query */
 
-	if (!pgfdw_exec_cleanup_query(entry->conn, sql, false))
+	if (!pgfdw_exec_cleanup_query(entry, sql, false))
 		return;					/* Unable to abort remote (sub)transaction */
 
 	if (toplevel)
 	{
 		if (entry->have_prep_stmt && entry->have_error &&
-			!pgfdw_exec_cleanup_query(entry->conn,
+			!pgfdw_exec_cleanup_query(entry,
 									  "DEALLOCATE ALL",
 									  true))
 			return;				/* Trouble clearing prepared statements */
@@ -2004,7 +2041,8 @@ pgfdw_finish_prepare_cleanup(List *pending_entries_prepare)
 }
 
 static void
-pgfdw_commit_prepared(ConnCacheEntry *entry)
+pgfdw_commit_prepared(ConnCacheEntry *entry,
+					  List **pending_entries_commit_prepared)
 {
 	char		sql[256];
 	bool		success = true;
@@ -2020,7 +2058,14 @@ pgfdw_commit_prepared(ConnCacheEntry *entry)
 		PreparedXactCommand(sql, "COMMIT PREPARED", entry);
 
 		entry->changing_xact_state = true;
-		success = pgfdw_exec_cleanup_query(entry->conn, sql, false);
+		if (entry->parallel_commit)
+		{
+			if (pgfdw_exec_cleanup_query_begin(entry, sql))
+				*pending_entries_commit_prepared =
+					lappend(*pending_entries_commit_prepared, entry);
+			return;
+		}
+		success = pgfdw_exec_cleanup_query(entry, sql, false);
 		entry->changing_xact_state = false;
 	}
 
@@ -2031,6 +2076,32 @@ pgfdw_commit_prepared(ConnCacheEntry *entry)
 	 */
 	if (success)
 		pgfdw_deallocate_all(entry);
+}
+
+static void
+pgfdw_finish_commit_prepared_cleanup(List *pending_entries_commit_prepared)
+{
+	ConnCacheEntry *entry;
+	char		sql[256];
+	ListCell   *lc;
+
+	Assert(pending_entries_commit_prepared);
+
+	foreach(lc, pending_entries_commit_prepared)
+	{
+		bool		success;
+
+		entry = (ConnCacheEntry *) lfirst(lc);
+
+		Assert(entry->changing_xact_state);
+
+		PreparedXactCommand(sql, "COMMIT PREPARED", entry);
+		success = pgfdw_exec_cleanup_query_end(entry, sql, false);
+		entry->changing_xact_state = false;
+
+		if (success)
+			pgfdw_deallocate_all(entry);
+	}
 }
 
 static bool
@@ -2063,7 +2134,7 @@ static void
 pgfdw_deallocate_all(ConnCacheEntry *entry)
 {
 	if (entry->have_prep_stmt && entry->have_error)
-		pgfdw_exec_cleanup_query(entry->conn, "DEALLOCATE ALL", true);
+		pgfdw_exec_cleanup_query(entry, "DEALLOCATE ALL", true);
 
 	entry->have_prep_stmt = false;
 	entry->have_error = false;
