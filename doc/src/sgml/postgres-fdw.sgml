@@ -777,27 +777,48 @@ OPTIONS (ADD password_required 'false');
 
   <variablelist>
    <varlistentry>
-    <term><function>postgres_fdw_get_connections(OUT server_name text, OUT valid boolean) returns setof record</function></term>
+    <term><function>postgres_fdw_get_connections(IN require_verify boolean DEFAULT false,
+     OUT server_name text, OUT valid boolean, OUT used_in_xact boolean, OUT closed boolean)
+     returns setof record</function></term>
     <listitem>
      <para>
       This function returns the foreign server names of all the open
       connections that <filename>postgres_fdw</filename> established from
-      the local session to the foreign servers. It also returns whether
-      each connection is valid or not. <literal>false</literal> is returned
-      if the foreign server connection is used in the current local
-      transaction but its foreign server or user mapping is changed or
-      dropped (Note that server name of an invalid connection will be
-      <literal>NULL</literal> if the server is dropped),
-      and then such invalid connection will be closed at
-      the end of that transaction. <literal>true</literal> is returned
-      otherwise. If there are no open connections, no record is returned.
+      the local session to the foreign servers. It also returns whether each
+      connection is valid and has been used within a transaction.
+      <literal>valid</literal> is returned as <literal>false</literal> if the
+      foreign server connection is used in the current local transaction but
+      its foreign server or user mapping is changed or dropped (Note that
+      server name of an invalid connection will be <literal>NULL</literal> if
+      the server is dropped), and then such invalid connection will be closed
+      at the end of that transaction. The attribute is set to <literal>true</literal>
+      otherwise.
+     </para>
+     <para>
+      If <literal>require_verify</literal> is set to <literal>true</literal>,
+      the function checks the status of remote connections from the local
+      session to the foreign server. This check is performed by polling the
+      socket, which allows long-running transactions to be aborted sooner if
+      the kernel reports that the connection is closed. This feature is
+      currently available only on systems that support the non-standard
+      <symbol>POLLRDHUP</symbol> extension to the <symbol>poll</symbol> system
+      call, including Linux. <literal>closed</literal> attribute indicates the
+      result of this check. <literal>false</literal> means the existing
+      connection is not closed by the remote peer. <literal>true</literal>
+      means if either checked connection has been closed.
+      <literal>NULL</literal> means a valid connection to the specified foreign
+      server is not established, this function is not available on this
+      platform, or <literal>require_verify</literal> is <literal>false</literal>.
+     </para>
+     <para>
+      If there are no open connections, no record is returned.
       Example usage of the function:
 <screen>
-postgres=# SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
- server_name | valid
--------------+-------
- loopback1   | t
- loopback2   | f
+postgres=*# SELECT * FROM postgres_fdw_get_connections(true) ORDER BY 1;
+ server_name | valid | used_in_xact | closed 
+-------------+-------+--------------+--------
+ loopback1   | t     | t            | f
+ loopback2   | t     | t            | f
 </screen>
      </para>
     </listitem>
@@ -847,6 +868,26 @@ postgres=# SELECT postgres_fdw_disconnect_all();
      </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term><function>postgres_fdw_can_verify_connection() returns boolean</function></term>
+    <listitem>
+     <para>
+      This function checks whether <function>postgres_fdw_get_connections</function>
+      can verify the status of remote connections or not. This returns
+      <literal>true</literal> if it can be used, otherwise returns <literal>false</literal>.
+      Example usage of the function:
+
+<screen>
+postgres=# SELECT postgres_fdw_can_verify_connection();
+ postgres_fdw_can_verify_connection
+------------------------------------
+ t
+</screen>
+     </para>
+    </listitem>
+   </varlistentry>
+
    </variablelist>
 
 </sect2>

@@ -12,6 +12,10 @@
  */
 #include "postgres.h"
 
+#if HAVE_POLL_H
+#include <poll.h>
+#endif
+
 #include "access/htup_details.h"
 #include "access/xact.h"
 #include "catalog/pg_user_mapping.h"
@@ -107,12 +111,20 @@ static uint32 pgfdw_we_get_result = 0;
 					 (entry)->xact_depth, (entry)->xact_depth); \
 	} while(0)
 
+enum pgfdwVersion
+{
+	PGFDW_V1_0 = 0,
+	PGFDW_V1_2,
+}			pgfdwVersion;
+
 /*
  * SQL functions
  */
 PG_FUNCTION_INFO_V1(postgres_fdw_get_connections);
+PG_FUNCTION_INFO_V1(postgres_fdw_get_connections_1_2);
 PG_FUNCTION_INFO_V1(postgres_fdw_disconnect);
 PG_FUNCTION_INFO_V1(postgres_fdw_disconnect_all);
+PG_FUNCTION_INFO_V1(postgres_fdw_can_verify_connection);
 
 /* prototypes of private functions */
 static void make_new_connection(ConnCacheEntry *entry, UserMapping *user);
@@ -159,6 +171,12 @@ static void pgfdw_security_check(const char **keywords, const char **values,
 								 UserMapping *user, PGconn *conn);
 static bool UserMappingPasswordRequired(UserMapping *user);
 static bool disconnect_cached_connections(Oid serverid);
+static Datum postgres_fdw_get_connections_internal(FunctionCallInfo fcinfo,
+												   enum pgfdwVersion api_version);
+
+/* Low layer-like functions. They are used for verifying connections. */
+static int	pgfdw_conn_check(PGconn *conn);
+static bool pgfdw_conn_checkable(void);
 
 /*
  * Get a PGconn which can be used to execute queries on the remote PostgreSQL
@@ -1978,22 +1996,31 @@ pgfdw_finish_abort_cleanup(List *pending_entries, List *cancel_requested,
 }
 
 /*
- * List active foreign server connections.
+ * Internal function for postgres_fdw_get_connections variants.
  *
- * This function takes no input parameter and returns setof record made of
- * following values:
+ * If the api_version is 1.0, this function takes no input parameter and
+ * returns setof record made of following values:
  * - server_name - server name of active connection. In case the foreign server
  *   is dropped but still the connection is active, then the server name will
  *   be NULL in output.
  * - valid - true/false representing whether the connection is valid or not.
  * 	 Note that the connections can get invalidated in pgfdw_inval_callback.
  *
+ * If the version is 1.2 and later, this function takes an input parameter,
+ * which indicates the need for a health check. Regarding the returned record,
+ * this returns two additional values:
+ * - used_in_xact - indicates whether the server has been used in a transaction
+ *   or not.
+ * - closed - true if the local session seems to be disconnected from other
+ *   servers.
+ *
  * No records are returned when there are no cached connections at all.
  */
-Datum
-postgres_fdw_get_connections(PG_FUNCTION_ARGS)
+static Datum
+postgres_fdw_get_connections_internal(FunctionCallInfo fcinfo,
+									  enum pgfdwVersion api_version)
 {
-#define POSTGRES_FDW_GET_CONNECTIONS_COLS	2
+#define POSTGRES_FDW_GET_CONNECTIONS_COLS	4
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	HASH_SEQ_STATUS scan;
 	ConnCacheEntry *entry;
@@ -2061,10 +2088,53 @@ postgres_fdw_get_connections(PG_FUNCTION_ARGS)
 
 		values[1] = BoolGetDatum(!entry->invalidated);
 
+		/* Add additional attributes if the version is 1.2 or later */
+		if (api_version == PGFDW_V1_2)
+		{
+			bool		require_verify = PG_GETARG_BOOL(1);
+
+			/* Has this server been used in the transaction? */
+			values[2] = BoolGetDatum(entry->xact_depth > 0);
+
+			/*
+			 * If requested and the connection is not invalidated, check the
+			 * status of the remote connection from the backend process and
+			 * return the result. Otherwise returns NULL.
+			 */
+			if (require_verify && !entry->invalidated && entry->conn)
+			{
+				values[3] = BoolGetDatum(pgfdw_conn_checkable() ?
+										 pgfdw_conn_check(entry->conn) != 0 :
+										 false);
+			}
+			else
+				nulls[3] = true;
+		}
+
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 	}
 
 	PG_RETURN_VOID();
+}
+
+/*
+ * List active foreign server connections.
+ *
+ * The SQL API of this function has changed in version, which could verify the
+ * status of remote connections. The actual implementation was moved to the
+ * internal function, and we could switch by the api_version to support the old
+ * SQL declaration.
+ */
+Datum
+postgres_fdw_get_connections_1_2(PG_FUNCTION_ARGS)
+{
+	return postgres_fdw_get_connections_internal(fcinfo, PGFDW_V1_2);
+}
+
+Datum
+postgres_fdw_get_connections(PG_FUNCTION_ARGS)
+{
+	return postgres_fdw_get_connections_internal(fcinfo, PGFDW_V1_0);
 }
 
 /*
@@ -2191,4 +2261,73 @@ disconnect_cached_connections(Oid serverid)
 	}
 
 	return result;
+}
+
+/*
+ * Check whether functions for verifying cached connections work well or not
+ */
+Datum
+postgres_fdw_can_verify_connection(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_BOOL(pgfdw_conn_checkable());
+}
+
+/*
+ * Check whether the socket peer closed the connection or not.
+ *
+ * Returns >0 if input connection is bad or remote peer seems to be closed,
+ * 0 if it is valid, and -1 if an error occurred.
+ */
+static int
+pgfdw_conn_check(PGconn *conn)
+{
+	int			sock = PQsocket(conn);
+
+	if (!pgfdw_conn_checkable())
+		return 0;
+
+	if (!conn || PQstatus(conn) != CONNECTION_OK || sock == PGINVALID_SOCKET)
+		return -1;
+
+#if (defined(HAVE_POLL) && defined(POLLRDHUP))
+	{
+		/*
+		 * This platform seems to have poll(2), and can wait POLLRDHUP event.
+		 * So construct pollfd and directly call it.
+		 */
+		struct pollfd input_fd;
+		int			result;
+
+		input_fd.fd = sock;
+		input_fd.events = POLLRDHUP;
+		input_fd.revents = 0;
+
+		do
+			result = poll(&input_fd, 1, 0);
+		while (result < 0 && errno == EINTR);
+
+		if (result < 0)
+			return -1;
+
+		return input_fd.revents;
+	}
+#else
+	/* Do not support socket checking on this platform, return 0 */
+	return 0;
+#endif
+}
+
+/*
+ * Check whether pgfdw_conn_check() can work on this platform.
+ *
+ * Returns true if this can use pgfdw_conn_check(), otherwise false.
+ */
+static bool
+pgfdw_conn_checkable(void)
+{
+#if (defined(HAVE_POLL) && defined(POLLRDHUP))
+	return true;
+#else
+	return false;
+#endif
 }
