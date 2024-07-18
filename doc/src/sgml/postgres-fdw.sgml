@@ -782,8 +782,8 @@ OPTIONS (ADD password_required 'false');
      returns setof record</function></term>
     <listitem>
      <para>
-      This function returns the foreign server names of all the open
-      connections that <filename>postgres_fdw</filename> established from
+      This function returns the foreign server names and user names of all the
+      open connections that <filename>postgres_fdw</filename> established from
       the local session to the foreign servers. It also returns whether each
       connection is valid and has been used within a transaction.
       <literal>valid</literal> is returned as <literal>false</literal> if the
@@ -815,10 +815,10 @@ OPTIONS (ADD password_required 'false');
       Example usage of the function:
 <screen>
 postgres=*# SELECT * FROM postgres_fdw_get_connections(true) ORDER BY 1;
- server_name | valid | used_in_xact | closed 
--------------+-------+--------------+--------
- loopback1   | t     | t            | f
- loopback2   | t     | t            | f
+ server_name | valid | user_name | used_in_xact | closed 
+-------------+-------+-----------+--------------+--------
+ loopback1   | t     | public    | t            | f
+ loopback2   | t     | public    | t            | f
 </screen>
      </para>
     </listitem>

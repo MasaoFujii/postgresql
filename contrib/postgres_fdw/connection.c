@@ -2008,7 +2008,10 @@ pgfdw_finish_abort_cleanup(List *pending_entries, List *cancel_requested,
  *
  * If the version is 1.2 and later, this function takes an input parameter,
  * which indicates the need for a health check. Regarding the returned record,
- * this returns two additional values:
+ * this returns three additional values:
+ * - user_name - user mapping name of active connection. In case the foreign
+ *   server is dropped but still the connection is active, then the server name
+ *   will be NULL in output.
  * - used_in_xact - indicates whether the server has been used in a transaction
  *   or not.
  * - closed - true if the local session seems to be disconnected from other
@@ -2020,7 +2023,7 @@ static Datum
 postgres_fdw_get_connections_internal(FunctionCallInfo fcinfo,
 									  enum pgfdwVersion api_version)
 {
-#define POSTGRES_FDW_GET_CONNECTIONS_COLS	4
+#define POSTGRES_FDW_GET_CONNECTIONS_COLS	5
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	HASH_SEQ_STATUS scan;
 	ConnCacheEntry *entry;
@@ -2092,9 +2095,29 @@ postgres_fdw_get_connections_internal(FunctionCallInfo fcinfo,
 		if (api_version == PGFDW_V1_2)
 		{
 			bool		require_verify = PG_GETARG_BOOL(1);
+			UserMapping *user = GetUserMappingFromOid(entry->key, true);
+
+			/*
+			 * The same as in the foreign server case, user mappings can also
+			 * be dropped in the current explicit transaction, so the same
+			 * check as in the server case is required.
+			 */
+			if (user)
+				values[2] = CStringGetTextDatum(MappingUserName(user->userid));
+			else
+			{
+				/*
+				 * If we reach here, this entry must have been invalidated in
+				 * pgfdw_inval_callback, same as server case.
+				 */
+				Assert(entry->conn && entry->xact_depth > 0 &&
+					   entry->invalidated);
+
+				nulls[2] = true;
+			}
 
 			/* Has this server been used in the transaction? */
-			values[2] = BoolGetDatum(entry->xact_depth > 0);
+			values[3] = BoolGetDatum(entry->xact_depth > 0);
 
 			/*
 			 * If requested and the connection is not invalidated, check the
@@ -2103,12 +2126,12 @@ postgres_fdw_get_connections_internal(FunctionCallInfo fcinfo,
 			 */
 			if (require_verify && !entry->invalidated && entry->conn)
 			{
-				values[3] = BoolGetDatum(pgfdw_conn_checkable() ?
+				values[4] = BoolGetDatum(pgfdw_conn_checkable() ?
 										 pgfdw_conn_check(entry->conn) != 0 :
 										 false);
 			}
 			else
-				nulls[3] = true;
+				nulls[4] = true;
 		}
 
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
