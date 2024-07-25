@@ -3731,6 +3731,7 @@ pg_wc_probefunc
 pg_wchar
 pg_wchar_tbl
 pgp_armor_headers_state
+pgfdwVersion
 pgsocket
 pgsql_thing_t
 pgssEntry
