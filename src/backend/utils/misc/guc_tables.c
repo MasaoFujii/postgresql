@@ -3169,13 +3169,14 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"log_autovacuum_min_duration", PGC_SIGHUP, LOGGING_WHAT,
+		{"log_autovacuum_vacuum_min_duration", PGC_SIGHUP, LOGGING_WHAT,
 			gettext_noop("Sets the minimum execution time above which "
-						 "autovacuum actions will be logged."),
-			gettext_noop("-1 disables logging autovacuum actions. 0 means log all autovacuum actions."),
+						 "vacuum actions by autovacuum will be logged."),
+			gettext_noop("-1 disables logging vacuum actions by autovacuum. "
+						 "0 means log all vacuum actions by autovacuum."),
 			GUC_UNIT_MS
 		},
-		&Log_autovacuum_min_duration,
+		&Log_autovacuum_vac_min_duration,
 		600000, -1, INT_MAX,
 		NULL, NULL, NULL
 	},

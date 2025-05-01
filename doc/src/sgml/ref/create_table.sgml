@@ -1934,16 +1934,16 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
     </listitem>
    </varlistentry>
 
-   <varlistentry id="reloption-log-autovacuum-min-duration" xreflabel="log_autovacuum_min_duration">
-    <term><literal>log_autovacuum_min_duration</literal>, <literal>toast.log_autovacuum_min_duration</literal> (<type>integer</type>)
+   <varlistentry id="reloption-log-autovacuum-vacuum-min-duration" xreflabel="log_autovacuum_vacuum_min_duration">
+    <term><literal>log_autovacuum_vacuum_min_duration</literal>, <literal>toast.log_autovacuum_vacuum_min_duration</literal> (<type>integer</type>)
     <indexterm>
-     <primary><varname>log_autovacuum_min_duration</varname></primary>
+     <primary><varname>log_autovacuum_vacuum_min_duration</varname></primary>
      <secondary>storage parameter</secondary>
     </indexterm>
     </term>
     <listitem>
      <para>
-      Per-table value for <xref linkend="guc-log-autovacuum-min-duration"/>
+      Per-table value for <xref linkend="guc-log-autovacuum-vacuum-min-duration"/>
       parameter.
      </para>
     </listitem>

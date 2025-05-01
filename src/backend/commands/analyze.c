@@ -139,7 +139,7 @@ analyze_rel(Oid relid, RangeVar *relation,
 	 * Make sure to generate only logs for ANALYZE in this case.
 	 */
 	onerel = vacuum_open_relation(relid, relation, params->options & ~(VACOPT_VACUUM),
-								  params->log_min_duration >= 0,
+								  params->log_vacuum_min_duration >= 0,
 								  ShareUpdateExclusiveLock);
 
 	/* leave if relation could not be opened or locked */
@@ -311,7 +311,7 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 
 	verbose = (params->options & VACOPT_VERBOSE) != 0;
 	instrument = (verbose || (AmAutoVacuumWorkerProcess() &&
-							  params->log_min_duration >= 0));
+							  params->log_vacuum_min_duration >= 0));
 	if (inh)
 		ereport(elevel,
 				(errmsg("analyzing \"%s.%s\" inheritance tree",
@@ -736,9 +736,9 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 	{
 		TimestampTz endtime = GetCurrentTimestamp();
 
-		if (verbose || params->log_min_duration == 0 ||
+		if (verbose || params->log_vacuum_min_duration == 0 ||
 			TimestampDifferenceExceeds(starttime, endtime,
-									   params->log_min_duration))
+									   params->log_vacuum_min_duration))
 		{
 			long		delay_in_ms;
 			WalUsage	walusage;

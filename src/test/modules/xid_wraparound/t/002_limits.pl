@@ -28,7 +28,7 @@ $node->init;
 $node->append_conf(
 	'postgresql.conf', qq[
 autovacuum_naptime = 1s
-log_autovacuum_min_duration = 0
+log_autovacuum_vacuum_min_duration = 0
 ]);
 $node->start;
 $node->safe_psql('postgres', 'CREATE EXTENSION xid_wraparound');

@@ -636,7 +636,7 @@ SELECT datname, age(datfrozenxid) FROM pg_database;
      <structfield>relminmxid</structfield> advanced, and the number of
      newly frozen pages.  The same details appear in the server log when
      autovacuum logging (controlled by <xref
-      linkend="guc-log-autovacuum-min-duration"/>) reports on a
+      linkend="guc-log-autovacuum-vacuum-min-duration"/>) reports on a
      <command>VACUUM</command> operation executed by autovacuum.
     </para>
    </tip>
@@ -889,7 +889,7 @@ HINT:  Execute a database-wide VACUUM in that database.
     the next database will be processed as soon as the first worker finishes.
     Each worker process will check each table within its database and
     execute <command>VACUUM</command> and/or <command>ANALYZE</command> as needed.
-    <xref linkend="guc-log-autovacuum-min-duration"/> can be set to monitor
+    <xref linkend="guc-log-autovacuum-vacuum-min-duration"/> can be set to monitor
     autovacuum workers' activity.
    </para>
 
