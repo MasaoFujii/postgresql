@@ -321,6 +321,15 @@ static relopt_int intRelOpts[] =
 	},
 	{
 		{
+			"log_autovacuum_analyze_min_duration",
+			"Sets the minimum execution time above which analyze actions by autovacuum will be logged",
+			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+			ShareUpdateExclusiveLock
+		},
+		-1, -1, INT_MAX
+	},
+	{
+		{
 			"log_autovacuum_vacuum_min_duration",
 			"Sets the minimum execution time above which vacuum actions by autovacuum will be logged",
 			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
@@ -1894,6 +1903,8 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, multixact_freeze_max_age)},
 		{"autovacuum_multixact_freeze_table_age", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, multixact_freeze_table_age)},
+		{"log_autovacuum_analyze_min_duration", RELOPT_TYPE_INT,
+		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, log_analyze_min_duration)},
 		{"log_autovacuum_vacuum_min_duration", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, log_vacuum_min_duration)},
 		{"toast_tuple_target", RELOPT_TYPE_INT,

@@ -224,6 +224,9 @@ typedef struct VacuumParams
 	int			multixact_freeze_table_age; /* multixact age at which to scan
 											 * whole table */
 	bool		is_wraparound;	/* force a for-wraparound vacuum */
+	int			log_analyze_min_duration;	/* minimum execution threshold in ms
+											 * at which analyze by autovacuum is
+											 * logged, -1 to use default */
 	int			log_vacuum_min_duration;	/* minimum execution threshold in ms
 											 * at which vacuum by autovacuum is
 											 * logged, -1 to use default */

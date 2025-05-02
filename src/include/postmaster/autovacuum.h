@@ -47,6 +47,7 @@ extern PGDLLIMPORT int autovacuum_vac_cost_limit;
 /* autovacuum launcher PID, only valid when worker is shutting down */
 extern PGDLLIMPORT int AutovacuumLauncherPid;
 
+extern PGDLLIMPORT int Log_autovacuum_anl_min_duration;
 extern PGDLLIMPORT int Log_autovacuum_vac_min_duration;
 
 /* Status inquiry functions */

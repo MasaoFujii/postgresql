@@ -133,6 +133,7 @@ int			autovacuum_multixact_freeze_max_age;
 double		autovacuum_vac_cost_delay;
 int			autovacuum_vac_cost_limit;
 
+int			Log_autovacuum_anl_min_duration = 600000;
 int			Log_autovacuum_vac_min_duration = 600000;
 
 /* the minimum allowed time between two awakenings of the launcher */
@@ -2791,6 +2792,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		int			freeze_table_age;
 		int			multixact_freeze_min_age;
 		int			multixact_freeze_table_age;
+		int			log_analyze_min_duration;
 		int			log_vacuum_min_duration;
 
 		/*
@@ -2799,6 +2801,11 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		 * toast table, try the main table too.  Otherwise use the GUC
 		 * defaults, autovacuum's own first and plain vacuum second.
 		 */
+
+		/* -1 in autovac setting means use log_autovacuum_analyze_min_duration */
+		log_analyze_min_duration = (avopts && avopts->log_analyze_min_duration >= 0)
+			? avopts->log_analyze_min_duration
+			: Log_autovacuum_anl_min_duration;
 
 		/* -1 in autovac setting means use log_autovacuum_vacuum_min_duration */
 		log_vacuum_min_duration = (avopts && avopts->log_vacuum_min_duration >= 0)
@@ -2854,6 +2861,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		tab->at_params.multixact_freeze_min_age = multixact_freeze_min_age;
 		tab->at_params.multixact_freeze_table_age = multixact_freeze_table_age;
 		tab->at_params.is_wraparound = wraparound;
+		tab->at_params.log_analyze_min_duration = log_analyze_min_duration;
 		tab->at_params.log_vacuum_min_duration = log_vacuum_min_duration;
 		tab->at_params.toast_parent = InvalidOid;
 

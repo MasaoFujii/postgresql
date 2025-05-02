@@ -24,6 +24,7 @@ $node->append_conf(
 autovacuum_naptime = 1s
 # so it's easier to verify the order of operations
 autovacuum_max_workers = 1
+log_autovacuum_analyze_min_duration = 0
 log_autovacuum_vacuum_min_duration = 0
 ]);
 $node->start;
