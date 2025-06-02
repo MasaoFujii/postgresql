@@ -1,5 +1,9 @@
 # Copyright (c) 2022-2025, PostgreSQL Global Development Group
 
+dummy_index_am_sources = files(
+  '../dummy_index_am/dummy_index_am.c',
+)
+
 test_install_data += files(
   'test_ext1--1.0.sql',
   'test_ext1.control',
@@ -44,6 +48,8 @@ test_install_data += files(
   'test_ext_req_schema3.control',
   'test_ext_set_schema--1.0.sql',
   'test_ext_set_schema.control',
+  '../dummy_index_am/dummy_index_am.control',
+  '../dummy_index_am/dummy_index_am--1.0.sql',
 )
 
 tests += {
@@ -60,6 +66,7 @@ tests += {
   'tap': {
     'tests': [
       't/001_extension_control_path.pl',
+      't/002_strip_modulepathname.pl',
     ],
   },
 }
