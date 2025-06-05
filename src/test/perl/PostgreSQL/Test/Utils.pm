@@ -918,7 +918,7 @@ sub command_exit_is
 
 =item program_help_ok(cmd)
 
-Check that the command supports the C<--help> option.
+Check that the command supports the C<-?> and C<--help> option.
 
 =cut
 
@@ -927,8 +927,17 @@ sub program_help_ok
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
 	my ($cmd) = @_;
 	my ($stdout, $stderr);
+
+	print("# Running: $cmd -?\n");
+	my $result = IPC::Run::run [ $cmd, '-?' ],
+	  '>' => \$stdout,
+	  '2>' => \$stderr;
+	ok($result, "$cmd -? exit code 0");
+	isnt($stdout, '', "$cmd -? goes to stdout");
+	is($stderr, '', "$cmd -? nothing to stderr");
+
 	print("# Running: $cmd --help\n");
-	my $result = IPC::Run::run [ $cmd, '--help' ],
+	$result = IPC::Run::run [ $cmd, '--help' ],
 	  '>' => \$stdout,
 	  '2>' => \$stderr;
 	ok($result, "$cmd --help exit code 0");
@@ -950,7 +959,7 @@ sub program_help_ok
 
 =item program_version_ok(cmd)
 
-Check that the command supports the C<--version> option.
+Check that the command supports the C<-V> and C<--version> option.
 
 =cut
 
@@ -959,8 +968,17 @@ sub program_version_ok
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
 	my ($cmd) = @_;
 	my ($stdout, $stderr);
+
+	print("# Running: $cmd -V\n");
+	my $result = IPC::Run::run [ $cmd, '-V' ],
+	  '>' => \$stdout,
+	  '2>' => \$stderr;
+	ok($result, "$cmd -V exit code 0");
+	isnt($stdout, '', "$cmd -V goes to stdout");
+	is($stderr, '', "$cmd -V nothing to stderr");
+
 	print("# Running: $cmd --version\n");
-	my $result = IPC::Run::run [ $cmd, '--version' ],
+	$result = IPC::Run::run [ $cmd, '--version' ],
 	  '>' => \$stdout,
 	  '2>' => \$stderr;
 	ok($result, "$cmd --version exit code 0");
