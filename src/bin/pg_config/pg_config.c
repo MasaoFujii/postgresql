@@ -63,6 +63,7 @@ static const InfoItem info_items[] = {
 	{"--ldflags_sl", "LDFLAGS_SL"},
 	{"--libs", "LIBS"},
 	{"--version", "VERSION"},
+	{"-V", "VERSION"},
 	{NULL, NULL}
 };
 
