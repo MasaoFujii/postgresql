@@ -4015,6 +4015,7 @@ typedef struct RefreshMatViewStmt
 typedef struct CheckPointStmt
 {
 	NodeTag		type;
+	List	   *options;
 } CheckPointStmt;
 
 /* ----------------------

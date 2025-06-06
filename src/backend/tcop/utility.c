@@ -943,6 +943,11 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 			break;
 
 		case T_CheckPointStmt:
+			CheckPointStmt   *stmt = (CheckPointStmt *) parsetree;
+			ListCell   *lc;
+			bool		immediate = true;
+			bool		flush_all = false;
+
 			if (!has_privs_of_role(GetUserId(), ROLE_PG_CHECKPOINT))
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
@@ -952,7 +957,38 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 						 errdetail("Only roles with privileges of the \"%s\" role may execute this command.",
 								   "pg_checkpoint")));
 
-			RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_WAIT |
+			/* Parse options list */
+			foreach(lc, stmt->options)
+			{
+				DefElem    *opt = (DefElem *) lfirst(lc);
+
+				if (strcmp(opt->defname, "mode") == 0)
+				{
+					char   *mode = defGetString(opt);
+					if (strcmp(mode, "immediate") == 0 || strcmp(mode, "fast") == 0)
+						immediate = true;
+					else if (strcmp(mode, "spread") == 0)
+						immediate = false;
+					else
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("CHECKPOINT option \"%s\" argument \"%s\" is invalid", opt->defname, mode),
+								 errhint("valid arguments are \"IMMEDIATE\" (or \"FAST\") and \"SPREAD\""),
+								 parser_errposition(pstate, opt->location)));
+				}
+				else if (strcmp(opt->defname, "flush_all") == 0)
+					flush_all = defGetBoolean(opt);
+				else
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("unrecognized CHECKPOINT option \"%s\"", opt->defname),
+							 errhint("valid options are \"IMMEDIATE\" and \"FLUSH_ALL\""),
+							 parser_errposition(pstate, opt->location)));
+			}
+
+			RequestCheckpoint(CHECKPOINT_WAIT |
+							  (immediate ? CHECKPOINT_IMMEDIATE : 0) |
+							  (flush_all ? CHECKPOINT_FLUSH_ALL : 0) |
 							  (RecoveryInProgress() ? 0 : CHECKPOINT_FORCE));
 			break;
 

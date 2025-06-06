@@ -21,7 +21,12 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CHECKPOINT
+CHECKPOINT [ ( option [, ...] ) ]
+
+<phrase>where <replaceable class="parameter">option</replaceable> can be one of:</phrase>
+
+    MODE { IMMEDIATE | FAST | SPREAD }
+    FLUSH_ALL [ <replaceable class="parameter">boolean</replaceable> ]
 </synopsis>
  </refsynopsisdiv>
 
@@ -31,18 +36,9 @@ CHECKPOINT
   <para>
    A checkpoint is a point in the write-ahead log sequence at which
    all data files have been updated to reflect the information in the
-   log.  All data files will be flushed to disk.  Refer to
+   log.  All data files will be flushed to disk, except for relations marked <literal>UNLOGGED</literal>.  Refer to
    <xref linkend="wal-configuration"/> for more details about what happens
    during a checkpoint.
-  </para>
-
-  <para>
-   The <command>CHECKPOINT</command> command forces an immediate
-   checkpoint when the command is issued, without waiting for a
-   regular checkpoint scheduled by the system (controlled by the settings in
-   <xref linkend="runtime-config-wal-checkpoints"/>).
-   <command>CHECKPOINT</command> is not intended for use during normal
-   operation.
   </para>
 
   <para>
@@ -56,6 +52,64 @@ CHECKPOINT
    the <xref linkend="predefined-role-pg-checkpoint"/>
    role can call <command>CHECKPOINT</command>.
   </para>
+
+  <para>
+   Running <command>CHECKPOINT</command> is not required during normal
+   operation; the system schedules checkpoints automatically (controlled by
+   the settings in <xref linkend="runtime-config-wal-checkpoints"/>).
+   <command>CHECKPOINT</command> can be beneficial to run before operations
+   such as binary backups or shutting down <productname>PostgreSQL</productname>
+   as this can reduce the amount of data to be flushed for the next checkpoint
+   within these operations. Specifically, <literal>UNLOGGED</literal> table
+   data is otherwise only flushed by the shutdown checkpoint.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>MODE</literal></term>
+    <listitem>
+     <para>
+      The <command>CHECKPOINT</command> command forces an immediate
+      checkpoint by default when the command is issued, without waiting for a
+      regular checkpoint scheduled by the system. <literal>FAST</literal> is a
+      synonym for <literal>IMMEDIATE</literal>.
+     </para>
+     <para>
+      A <literal>SPREAD</literal> checkpoint will instead spread out the write load
+      as determined by the <xref linkend="guc-checkpoint-completion-target"/>
+      setting, like the system-scheduled checkpoints.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>FLUSH_ALL</literal></term>
+    <listitem>
+     <para>
+      Requests the checkpoint to also flush data of <literal>UNLOGGED</literal>
+      relations. Defaults to off.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">boolean</replaceable></term>
+    <listitem>
+     <para>
+      Specifies whether the selected option should be turned on or off.
+      You can write <literal>TRUE</literal>, <literal>ON</literal>, or
+      <literal>1</literal> to enable the option, and <literal>FALSE</literal>,
+      <literal>OFF</literal>, or <literal>0</literal> to disable it.  The
+      <replaceable class="parameter">boolean</replaceable> value can also
+      be omitted, in which case <literal>TRUE</literal> is assumed.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
  </refsect1>
 
  <refsect1>
