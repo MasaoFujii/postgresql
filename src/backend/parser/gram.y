@@ -12827,7 +12827,7 @@ SelectStmt: select_no_parens			%prec UMINUS
 select_with_parens:
 			'(' select_no_parens ')'
 				{
-					SelectStmt *n = (SelectStmt *) $2;
+//					SelectStmt *n = (SelectStmt *) $2;
 
 					/*
 					 * As SelectStmt's location starts at the SELECT keyword,
@@ -12836,7 +12836,7 @@ select_with_parens:
 					 * of the query.  Without this, the RawStmt's length would
 					 * be used and would include the closing parenthesis.
 					 */
-					n->stmt_len = @3 - @2;
+//					n->stmt_len = @3 - @2;
 					$$ = $2;
 				}
 			| '(' select_with_parens ')'			{ $$ = $2; }
