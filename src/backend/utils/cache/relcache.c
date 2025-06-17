@@ -2417,6 +2417,9 @@ RelationReloadNailed(Relation relation)
 
 		pg_class_tuple = ScanPgRelation(RelationGetRelid(relation),
 										true, false);
+		if (!HeapTupleIsValid(pg_class_tuple))
+			elog(ERROR, "could not find pg_class entry for %u",
+				 RelationGetRelid(relation));
 		relp = (Form_pg_class) GETSTRUCT(pg_class_tuple);
 		memcpy(relation->rd_rel, relp, CLASS_TUPLE_SIZE);
 		heap_freetuple(pg_class_tuple);
