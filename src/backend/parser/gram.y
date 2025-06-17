@@ -2673,9 +2673,9 @@ alter_table_cmd:
 						ereport(ERROR,
 								errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 								errmsg("ALTER TABLE ... ALTER CONSTRAINT ... NOT VALID is not supported"),
-								parser_errposition(@4));
+								parser_errposition(@1));
 
-					processCASbits($4, @4, NULL,
+					processCASbits($4, @4, "",
 									&c->deferrable,
 									&c->initdeferred,
 									&c->is_enforced,
