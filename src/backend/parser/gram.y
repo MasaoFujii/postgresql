@@ -2668,7 +2668,14 @@ alter_table_cmd:
 						c->alterDeferrability = true;
 					if ($4 & CAS_NO_INHERIT)
 						c->alterInheritability = true;
-					processCASbits($4, @4, "FOREIGN KEY",
+
+					if ($4 & CAS_NOT_VALID)
+						ereport(ERROR,
+								errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								errmsg("ALTER TABLE ... ALTER CONSTRAINT ... NOT VALID is not supported"),
+								parser_errposition(@4));
+
+					processCASbits($4, @4, NULL,
 									&c->deferrable,
 									&c->initdeferred,
 									&c->is_enforced,
