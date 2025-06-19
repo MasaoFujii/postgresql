@@ -197,8 +197,18 @@ DROP TABLE ctlt1, ctlt2, ctlt3, ctlt4, ctlt12_storage, ctlt12_comments, ctlt1_in
 -- LIKE must respect NO INHERIT property of constraints
 CREATE TABLE noinh_con_copy (a int CHECK (a > 0) NO INHERIT, b int not null,
 	c int not null no inherit);
-CREATE TABLE noinh_con_copy1 (LIKE noinh_con_copy INCLUDING CONSTRAINTS);
+
+COMMENT ON CONSTRAINT noinh_con_copy_b_not_null ON noinh_con_copy IS 'not null b';
+COMMENT ON CONSTRAINT noinh_con_copy_c_not_null ON noinh_con_copy IS 'not null c no inherit';
+
+CREATE TABLE noinh_con_copy1 (LIKE noinh_con_copy INCLUDING CONSTRAINTS INCLUDING COMMENTS);
 \d+ noinh_con_copy1
+
+SELECT conname, description
+FROM  pg_description, pg_constraint c
+WHERE classoid = 'pg_constraint'::regclass
+AND   objoid = c.oid AND c.conrelid = 'noinh_con_copy1'::regclass
+ORDER BY conname COLLATE "C";
 
 -- fail, as partitioned tables don't allow NO INHERIT constraints
 CREATE TABLE noinh_con_copy1_parted (LIKE noinh_con_copy INCLUDING ALL)
