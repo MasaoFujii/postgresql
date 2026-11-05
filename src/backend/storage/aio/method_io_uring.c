@@ -98,6 +98,13 @@ PgAioUringContext
 	struct io_uring io_uring_ring;
 } PgAioUringContext;
 
+/* Postmaster-local metadata needed to release a ring */
+typedef struct PgAioUringCleanup
+{
+	struct io_uring ring;
+	unsigned	sq_entries;
+} PgAioUringCleanup;
+
 /*
  * Information about the capabilities that io_uring has.
  *
@@ -115,6 +122,12 @@ typedef struct PgAioUringCaps
 
 /* PgAioUringContexts for all backends */
 static PgAioUringContext *pgaio_uring_contexts;
+
+/*
+ * Postmaster-local cleanup metadata for all rings.  Keep this separate from
+ * shared memory, which a crashing backend might corrupt.
+ */
+static PgAioUringCleanup *pgaio_uring_cleanup_rings;
 
 /* the current backend's context */
 static PgAioUringContext *pgaio_my_uring_context;
@@ -287,11 +300,13 @@ pgaio_uring_cleanup(int code, Datum arg)
 	int			TotalProcs = pgaio_uring_procs();
 
 	Assert(!IsUnderPostmaster);
-	Assert(pgaio_uring_contexts != NULL);
+	Assert(pgaio_uring_cleanup_rings != NULL);
 
 	for (int i = 0; i < TotalProcs; i++)
-		io_uring_queue_exit(&pgaio_uring_contexts[i].io_uring_ring);
+		io_uring_queue_exit(&pgaio_uring_cleanup_rings[i].ring);
 
+	free(pgaio_uring_cleanup_rings);
+	pgaio_uring_cleanup_rings = NULL;
 	pgaio_uring_contexts = NULL;
 }
 
@@ -303,6 +318,14 @@ pgaio_uring_shmem_init(bool first_time)
 	char	   *shmem;
 	size_t		ring_mem_remain = 0;
 	char	   *ring_mem_next = 0;
+
+	Assert(!IsUnderPostmaster);
+	Assert(pgaio_uring_cleanup_rings == NULL);
+
+	pgaio_uring_cleanup_rings =
+		malloc(mul_size(TotalProcs, sizeof(PgAioUringCleanup)));
+	if (pgaio_uring_cleanup_rings == NULL)
+		elog(PANIC, "out of memory");
 
 	/*
 	 * We allocate memory for all PgAioUringContext instances and, if
@@ -335,6 +358,7 @@ pgaio_uring_shmem_init(bool first_time)
 	for (int contextno = 0; contextno < TotalProcs; contextno++)
 	{
 		PgAioUringContext *context = &pgaio_uring_contexts[contextno];
+		PgAioUringCleanup *cleanup = &pgaio_uring_cleanup_rings[contextno];
 		int			ret;
 
 		/*
@@ -408,6 +432,18 @@ pgaio_uring_shmem_init(bool first_time)
 					errmsg("could not setup io_uring queue: %m"),
 					hint != NULL ? errhint("%s", hint) : 0);
 		}
+
+		/*
+		 * Save the cleanup metadata before any backend can modify it.
+		 *
+		 * Some liburing versions dereference sq.kring_entries to determine
+		 * the size of the SQE mapping to unmap.  Save that value locally too,
+		 * and point the cleanup copy at it to avoid reading shared memory
+		 * during cleanup.
+		 */
+		cleanup->ring = context->io_uring_ring;
+		cleanup->sq_entries = *context->io_uring_ring.sq.kring_entries;
+		cleanup->ring.sq.kring_entries = &cleanup->sq_entries;
 
 		LWLockInitialize(&context->completion_lock, LWTRANCHE_AIO_URING_COMPLETION);
 	}
