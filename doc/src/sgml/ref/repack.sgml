@@ -294,7 +294,11 @@ REPACK [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] USING
     requirement is intolerable, you can disable this choice by temporarily
     setting <xref linkend="guc-enable-sort"/> to <literal>off</literal>; or
     omitting <literal>USING INDEX</literal> if the table doesn't need to be
-    reordered.
+    reordered.  The choice also follows <xref linkend="guc-enable-indexscan"/>
+    and <xref linkend="guc-enable-seqscan"/>: with
+    <varname>enable_indexscan</varname> off, a sequential scan and sort is
+    always used, and with <varname>enable_seqscan</varname> off, the index
+    scan is preferred.
    </para>
 
    <para>
