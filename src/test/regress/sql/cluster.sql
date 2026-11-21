@@ -486,4 +486,22 @@ DROP TABLE clstr_expression;
 DROP TABLE clstrpart;
 DROP TABLE cluster_aborted_upd;
 
+-- CLUSTER must honor enable_sort and enable_seqscan when choosing between
+-- index scan and sort
+CREATE TABLE clstr_sort_test (a int);
+CREATE INDEX clstr_sort_test_idx ON clstr_sort_test (a);
+ANALYZE clstr_sort_test;
+SET random_page_cost = 100000;	-- make seqscan + sort the cheaper choice
+\set VERBOSITY terse
+CLUSTER (VERBOSE) clstr_sort_test USING clstr_sort_test_idx;
+SET enable_sort = off;
+CLUSTER (VERBOSE) clstr_sort_test USING clstr_sort_test_idx;
+RESET enable_sort;
+SET enable_seqscan = off;
+CLUSTER (VERBOSE) clstr_sort_test USING clstr_sort_test_idx;
+\set VERBOSITY default
+RESET enable_seqscan;
+RESET random_page_cost;
+DROP TABLE clstr_sort_test;
+
 DROP USER regress_clstr_user;
