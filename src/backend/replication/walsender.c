@@ -2080,7 +2080,9 @@ WalSndWaitForWal(XLogRecPtr loc)
 			last_flush = now;
 		}
 
-		WalSndWait(wakeEvents, sleeptime, wait_event, loc);
+		WalSndWait(wakeEvents, sleeptime, wait_event,
+				   wait_event == WAIT_EVENT_WAIT_FOR_STANDBY_CONFIRMATION ?
+				   RecentFlushPtr : loc);
 	}
 
 	/* reactivate latch so WalSndLoop knows to continue */
@@ -4089,7 +4091,9 @@ WalSndWakeup(bool physical, bool logical)
  * on postmaster death.
  *
  * target_lsn is the required WAL position for
- * WAIT_EVENT_WAL_SENDER_WAIT_FOR_WAL and is unused for other wait events.
+ * WAIT_EVENT_WAL_SENDER_WAIT_FOR_WAL and
+ * WAIT_EVENT_WAIT_FOR_STANDBY_CONFIRMATION, and is unused for other wait
+ * events.
  */
 static void
 WalSndWait(uint32 socket_events, long timeout, uint32 wait_event,
@@ -4128,7 +4132,22 @@ WalSndWait(uint32 socket_events, long timeout, uint32 wait_event,
 	 * the receipt of the LSN.
 	 */
 	if (wait_event == WAIT_EVENT_WAIT_FOR_STANDBY_CONFIRMATION)
+	{
 		ConditionVariablePrepareToSleep(&WalSndCtl->wal_confirm_rcv_cv);
+
+		/*
+		 * Recheck the standby slots tested by NeedToWaitForStandbys() now
+		 * that we're on the waitlist. Otherwise, we could miss a wakeup for a
+		 * standby confirmation that occurred before we joined it. Pass
+		 * LOG_NEVER so we don't duplicate warnings already emitted there.
+		 */
+		Assert(XLogRecPtrIsValid(target_lsn));
+		if (StandbySlotsHaveCaughtup(target_lsn, LOG_NEVER))
+		{
+			ConditionVariableCancelSleep();
+			return;
+		}
+	}
 	else if (MyWalSnd->kind == REPLICATION_KIND_PHYSICAL)
 	{
 		ConditionVariablePrepareToSleep(&WalSndCtl->wal_flush_cv);
