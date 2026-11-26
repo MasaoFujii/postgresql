@@ -1,0 +1,99 @@
+name: ci-linux
+on:
+  push:
+    branches:
+      - "**"
+jobs:
+  ci-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        pgopt:
+          - base
+          - verbose-logging
+          - cache-release
+    env:
+      PG_TEST_EXTRA: "ssl kerberos"
+      PGOPT: ${{ matrix.pgopt }}
+    steps:
+    - uses: actions/checkout@v5
+    - name: apt
+      run: |
+        sudo apt-get --yes update
+        sudo apt-get --yes install gcc libreadline-dev flex bison make perl libipc-run-perl clang llvm-dev libperl-dev libpython3-dev tcl-dev libldap2-dev libicu-dev docbook docbook-xml docbook-xsl fop libxml2-utils xsltproc opensp libkrb5-dev krb5-admin-server krb5-kdc krb5-user slapd ldap-utils libssl-dev pkg-config locales-all gdb
+    - name: configure
+      run: |
+        export CPPFLAGS="-DENFORCE_REGRESSION_TEST_NAME_RESTRICTIONS $CPPFLAGS"
+        if [ "${PGOPT}" = "cache-release" ]; then
+          export CPPFLAGS="-DRELCACHE_FORCE_RELEASE -DCATCACHE_FORCE_RELEASE $CPPFLAGS"
+        fi
+        CONFOPT=
+        # Also test without atomics and spinlocks on PostgreSQL 17 and earlier.
+        # PostgreSQL 18 and later ignore these options with a warning.
+        if [ "${PGOPT}" = "verbose-logging" ]; then
+          export CONFOPT="--disable-atomics --disable-spinlocks $CONFOPT"
+        fi
+        ./configure --prefix=$HOME/install --enable-debug --enable-cassert --enable-tap-tests -with-tcl --with-python --with-perl --with-ldap --with-gssapi --with-openssl --with-icu --with-llvm --enable-injection-points $CONFOPT
+    - name: make
+      run: |
+        echo "COPT=-Wall -Werror" > src/Makefile.custom
+        make -s -j 4 world
+    - name: make install
+      run: |
+        make -s install
+    - name: pg_config
+      run: |
+        $HOME/install/bin/pg_config
+    - name: make check-world
+      run: |
+        # Keep cores outside test directories, which tests may remove.
+        mkdir -p "$RUNNER_TEMP/pg-cores"
+        echo "$RUNNER_TEMP/pg-cores/core.%p.%t" | sudo tee /proc/sys/kernel/core_pattern
+        ulimit -c unlimited
+        if [ "${PGOPT}" = "verbose-logging" ]; then
+          export TEMP_CONFIG="$RUNNER_TEMP/pg-test.conf"
+          echo "log_error_verbosity = verbose" > "$TEMP_CONFIG"
+        fi
+        make -s -j 4 check-world
+    - name: after failure
+      if: failure()
+      run: |
+        for f in $(find . -name regression.diffs) ; do echo "========= Contents of $f" ; head -1000 $f ; done
+        for f in $(find . -name install.log) ; do echo "========= Contents of $f" ; tail -100 $f ; done
+    - name: collect core backtraces
+      if: failure()
+      run: |
+        mkdir -p core-backtraces
+        while IFS= read -r -d '' core; do
+          trace="core-backtraces/$(basename "$core").txt"
+          # Resolve the executable from the core, including client crashes.
+          if ! timeout 60s gdb -nx --batch --quiet --core="$core" \
+              -ex 'info auxv' > "$trace" 2>&1; then
+            echo "Could not read core metadata: $core" >> "$trace"
+            continue
+          fi
+          executable=$(sed -n 's/.*AT_EXECFN.*"\(.*\)".*/\1/p' "$trace")
+          if [ -z "$executable" ] || [ ! -f "$executable" ]; then
+            echo "Executable unavailable: $executable (core: $core)" >> "$trace"
+            continue
+          fi
+          if ! timeout 120s gdb -nx --batch --quiet "$executable" "$core" \
+              -ex 'set pagination off' -ex 'thread apply all bt full' \
+              >> "$trace" 2>&1; then
+            echo "Could not complete backtrace: $core" >> "$trace"
+          fi
+        done < <(find "$RUNNER_TEMP/pg-cores" -type f -name 'core.*' -print0 2>/dev/null)
+    - name: upload failure logs
+      if: failure()
+      uses: actions/upload-artifact@v6
+      with:
+        name: ci-linux-logs-${{ matrix.pgopt }}-${{ github.run_attempt }}
+        if-no-files-found: ignore
+        path: |
+          config.log
+          core-backtraces/**
+          **/log/**
+          **/regression.diffs
+          **/regression.out
+          **/results/**
